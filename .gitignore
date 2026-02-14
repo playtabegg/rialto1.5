@@ -1,0 +1,54 @@
+# ============================================
+# Rialto v1 - .gitignore
+# ============================================
+
+# ---------- Client data ----------
+input/*/
+!input/.gitkeep
+output/
+
+# ---------- Python runtime ----------
+python39/
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+venv/
+
+# ---------- Old versions / backups ----------
+_archive/
+
+# ---------- Private business tools ----------
+_ops_console/
+rialto_ops.db
+
+# ---------- Secrets & credentials ----------
+signing_config.json
+
+# ---------- Session state & build artifacts ----------
+last_profile.json
+last_session.json
+build_log.txt
+
+# ---------- Profile templates (user-specific) ----------
+templates/*.json
+!templates/_temp/
+
+# ---------- OS generated ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+._*
+
+# ---------- IDE / editor ----------
+.vscode/
+.idea/
+.ap/
+*.swp
+*.swo
+*~

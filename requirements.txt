@@ -1,0 +1,14 @@
+# Rialto - Game Disc Builder
+# Core dependencies
+
+# Image processing
+pillow
+
+# Application packaging
+pyinstaller
+
+# GUI framework for advanced menus
+PyQt5
+
+# Windows-specific functionality
+pywin32
