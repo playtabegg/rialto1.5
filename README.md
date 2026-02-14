@@ -10,9 +10,7 @@ Built by [We the Indies](https://wetheindies.com). Free and open-source.
 
 - **One-click ISO creation** — Select your game folder, fill in metadata, hit Build
 - **Professional installers** — Inno Setup with 21+ language support, Start Menu entries, uninstaller
-- **Custom game menus** — PyQt5-powered launcher with background images/videos, logo, language selection
-- **Soundtrack CD creation** — Audio + data multi-session CDs with CUE sheets
-- **Bonus content gallery** — HTML-based gallery for screenshots, videos, developer notes
+- **Custom game menus** — PyQt5-powered launcher with background images/videos, logo, language selection, and bonus content viewer thru file explorer
 - **Dark/Light themes** — Modern UI with custom title bar
 - **Profile system** — Save and reuse build configurations
 - **Optional code signing** — SSL.com integration for signed installers
@@ -22,7 +20,7 @@ Built by [We the Indies](https://wetheindies.com). Free and open-source.
 - **Windows 10/11**
 - **Python 3.9+** (bundled in `python39/` or install separately)
 - **Inno Setup 6** — [Download](https://jrsoftware.org/isdl.php) (required for installer creation)
-- **mkisofs** or **oscdimg** — For ISO creation (optional, has Python fallback)
+- **mkisofs** or **oscdimg** — For ISO creation (recommended, has basic Python fallback)
 
 ## Quick Start
 
