@@ -1,6 +1,6 @@
 # Rialto - Game Disc Builder
 
-**Create professional game disc ISOs for indie games.** Rialto automates the entire pipeline: game files in, ready-to-burn ISO out — complete with installer, menus, bonus content, and soundtrack CDs.
+**Create professional game disc ISOs for indie games.** Rialto automates the entire pipeline: game files in, ready-to-burn ISO out — complete with installer, menus, and bonus content.
 
 Built by [We the Indies](https://wetheindies.com). Free and open-source.
 
@@ -10,7 +10,7 @@ Built by [We the Indies](https://wetheindies.com). Free and open-source.
 
 - **One-click ISO creation** — Select your game folder, fill in metadata, hit Build
 - **Professional installers** — Inno Setup with 21+ language support, Start Menu entries, uninstaller
-- **Custom game menus** — PyQt5-powered launcher with background images/videos, logo, language selection, and bonus content viewer thru file explorer
+- **Custom game menus** — PyQt5-powered launcher with background images/videos, logo, language selection, and bonus content
 - **Dark/Light themes** — Modern UI with custom title bar
 - **Profile system** — Save and reuse build configurations
 - **Optional code signing** — SSL.com integration for signed installers
@@ -44,6 +44,7 @@ input/
     disc_icon.ico       (optional)
     background.png      (optional - menu background)
     game_logo.png       (optional - menu logo)
+    bonus/              (optional - bonus content folder, opened via file explorer)
 ```
 
 ### Building

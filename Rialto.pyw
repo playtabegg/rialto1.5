@@ -151,6 +151,7 @@ class RialtoApp:
         
         # Code Signing settings
         self.sign_final_build = tk.BooleanVar(value=False)
+        self.remove_wti_branding = tk.BooleanVar(value=False)
         self.create_widgets()
         self.load_last_session()
         self.load_config()
@@ -612,6 +613,11 @@ class RialtoApp:
         final_check.pack(anchor="w", padx=(8, 4), pady=(4, 6))
         ToolTip(final_check, "Pause the build after creating your installer so you can digitally sign it. Signing tells Windows the file is safe and removes 'Unknown Publisher' warnings. Requires a paid certificate from a service like SSL.com (esigner.com).")
 
+        branding_check = ttk.Checkbutton(self.build_tools_frame, text="Remove WTI Branding",
+                                         variable=self.remove_wti_branding, command=self.save_signing_settings)
+        branding_check.pack(anchor="w", padx=(8, 4), pady=(0, 6))
+        ToolTip(branding_check, "Complimentary white label for your game. Removes the We the Indies bird logo and branding from your game's disc menu.")
+
         # --- Tools ---
         self.file_wrapper = tk.Frame(self.tool_groups_container, bd=1, relief="ridge", bg=self.dark_theme["bg"])
         self.file_wrapper.pack(side="left", padx=6)
@@ -662,7 +668,9 @@ class RialtoApp:
         toggle_btn.pack(pady=2, fill="x")
         ToolTip(toggle_btn, "Switch between dark and light mode.")
 
-
+        help_btn = ttk.Button(self.file_tools_frame, text="Help Guide", command=self.open_help_guide, style="Rounded.TButton")
+        help_btn.pack(pady=2, fill="x")
+        ToolTip(help_btn, "Open the Rialto help guide and documentation.")
 
 
 
@@ -679,8 +687,27 @@ class RialtoApp:
         
         # Load signing settings
         self.sign_final_build.set(self.config.get("sign_final_build", False))
+        self.remove_wti_branding.set(self.config.get("remove_wti_branding", False))
 
+    def open_help_guide(self):
+        """Open the README help guide"""
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.md"),
+        ]
+        if getattr(sys, 'frozen', False):
+            candidates.insert(0, os.path.join(os.path.dirname(sys.executable), "README.md"))
 
+        for readme_path in candidates:
+            if os.path.exists(readme_path):
+                try:
+                    os.startfile(readme_path)
+                    self.update_status("📖 Opened help guide")
+                    return
+                except Exception as e:
+                    self.update_status(f"⚠️ Could not open help guide: {e}")
+                    return
+
+        self.update_status("⚠️ README.md not found")
 
     def save_profile(self):
         """Save profile data"""
@@ -695,10 +722,10 @@ class RialtoApp:
         profile_data["Icon"] = self.ico_path_var.get()
         profile_data["DiscIcon"] = self.disc_icon_var.get()
         profile_data["DiscName"] = self.disc_name_var.get()
-  
-        
+        profile_data["RemoveWTIBranding"] = self.remove_wti_branding.get()
+
         # Add metadata for profile version (for future compatibility)
-        profile_data["_ProfileVersion"] = "2.1"  # Updated version
+        profile_data["_ProfileVersion"] = "2.2"
         profile_data["_CreatedBy"] = "Rialto Enhanced"
 
         # Default to templates folder
@@ -750,8 +777,8 @@ class RialtoApp:
                 self.ico_path_var.set(profile_data.get("Icon", ""))
                 self.disc_icon_var.set(profile_data.get("DiscIcon", ""))
                 self.disc_name_var.set(profile_data.get("DiscName", ""))
-               
-                
+                self.remove_wti_branding.set(profile_data.get("RemoveWTIBranding", False))
+
                 # Check profile version
                 profile_version = profile_data.get("_ProfileVersion", "1.0")
                 self.update_status(f"✅ Profile loaded: {os.path.basename(file_path)} (v{profile_version})")
@@ -1161,7 +1188,8 @@ class RialtoApp:
             self.config = {}
         
         self.config["sign_final_build"] = self.sign_final_build.get()
-        
+        self.config["remove_wti_branding"] = self.remove_wti_branding.get()
+
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=4)
@@ -1216,7 +1244,7 @@ class RialtoApp:
             self.enhance_installer_security(output_path)
 
             # 7. Build extras
-            self.update_status("Building bonus gallery...")
+            self.update_status("Copying bonus content...")
             self.build_bonus_gallery(self.current_game_path, output_path)
             self.generate_readme(output_path, meta)
             
@@ -1322,7 +1350,8 @@ class RialtoApp:
         menu_config = {
             "company_logo": "company_logo.png" if company_logo_path and os.path.exists(company_logo_path) else "",
             "copyright_text": self.publisher_text_var.get().strip(),
-            "language": "English"
+            "language": "English",
+            "remove_wti_branding": self.remove_wti_branding.get()
         }
         
         config_path = os.path.join(menu_dir, "menu_config.json")
@@ -2015,8 +2044,11 @@ exit /b 0
         """Create batch file menu that always works"""
         meta = {k: self.entries[k].get().strip() for k in self.entries}
         game_title = meta.get('Title', 'Game')
+        # Escape batch special characters to prevent command injection
+        for ch in ('&', '|', '>', '<', '^', '(', ')'):
+            game_title = game_title.replace(ch, f'^{ch}')
         game_title_upper = game_title.upper()
-        
+
         batch_content = """@echo off
 title {game_title} Menu
 color 07
@@ -2469,53 +2501,21 @@ exit
 
 
     def build_bonus_gallery(self, game_path, output_path):
-        """Create bonus content gallery if bonus folder exists"""
+        """Copy bonus content folder if it exists"""
         bonus_source = os.path.join(game_path, "bonus")
         bonus_output = os.path.join(output_path, "bonus")
-        
+
         if not os.path.exists(bonus_source):
-            self.update_status("ℹ️ No bonus folder found - skipping gallery")
+            self.update_status("ℹ️ No bonus folder found - skipping")
             return
-        
+
         try:
-            # Copy bonus folder to output
             if os.path.exists(bonus_output):
                 shutil.rmtree(bonus_output)
             shutil.copytree(bonus_source, bonus_output)
-            
-            # Create simple index.html for bonus content
-            html_content = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Bonus Content</title>
-    <style>
-        body { background: #1a1a1a; color: white; font-family: Arial, sans-serif; padding: 20px; }
-        .content { max-width: 800px; margin: 0 auto; }
-        .item { margin: 20px 0; padding: 15px; background: #2a2a2a; border-radius: 8px; }
-        img, video, audio { max-width: 100%; margin: 10px 0; }
-        .caption { font-style: italic; color: #ccc; margin-top: 10px; }
-    </style>
-</head>
-<body>
-    <div class="content">
-        <h1>Bonus Content</h1>
-        <p>Explore the additional content included with this game!</p>
-        
-        <div class="item">
-            <h3>Bonus Files</h3>
-            <p>Check the files in this folder for additional game content, artwork, music, and more.</p>
-        </div>
-    </div>
-</body>
-</html>"""
-            
-            with open(os.path.join(bonus_output, "index.html"), "w", encoding="utf-8") as f:
-                f.write(html_content)
-            
-            self.update_status("✅ Bonus content gallery created")
-            
+            self.update_status("✅ Bonus content copied")
         except Exception as e:
-            self.update_status(f"⚠️ Failed to create bonus gallery: {e}")
+            self.update_status(f"⚠️ Failed to copy bonus content: {e}")
 
 
 
@@ -2820,7 +2820,7 @@ exit
     def generate_readme(self, output_path, meta):
         readme_path = os.path.join(output_path, "README.txt")
         with open(readme_path, "w", encoding="utf-8") as f:
-            f.write("""=== INSTALLATION GUIDE ===
+            f.write(f"""=== INSTALLATION GUIDE ===
 
     Thank you for installing {meta['Title']}!
 
@@ -2830,8 +2830,9 @@ exit
     3. Once installed, you can launch the game from your Start Menu.
 
     Enjoy!
-    ~ We the Indies
-    """)
+""")
+            if not self.remove_wti_branding.get():
+                f.write("    ~ We the Indies\n")
 
 
 
@@ -2941,7 +2942,10 @@ Label={disc_label}
         
         meta = {k: self.entries[k].get().strip() for k in self.entries}
         game_title = meta.get('Title', 'Game')
-        
+        # Escape batch special characters
+        for ch in ('&', '|', '>', '<', '^', '(', ')'):
+            game_title = game_title.replace(ch, f'^{ch}')
+
         test_script = f"""@echo off
 echo ================================
 echo {game_title} - Compatibility Test
@@ -3337,7 +3341,9 @@ pause
         
         meta = {k: self.entries[k].get().strip() for k in self.entries}
         game_title = meta.get('Title', 'Game')
-        
+        # Sanitize title for safe embedding in generated Python source
+        safe_title = game_title.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", "")
+
         # Copy background image/video to menu folder
         bg_source = self.bg_path_var.get()
         bg_type = "none"
@@ -3381,15 +3387,16 @@ pause
             except OSError:
                 pass
         
-        # Copy bird logo from Rialto root to menu directory
-        bird_logo_source = asset_path("bird_logo.PNG")
-        if os.path.exists(bird_logo_source):
-            bird_logo_dest = os.path.join(menu_dir, "bird_logo.PNG")
-            try:
-                shutil.copy2(bird_logo_source, bird_logo_dest)
-                self.update_status("✅ Copied bird logo")
-            except Exception as e:
-                self.update_status(f"⚠️ Failed to copy bird logo: {e}")
+        # Copy bird logo from Rialto root to menu directory (unless white-labeled)
+        if not self.remove_wti_branding.get():
+            bird_logo_source = asset_path("bird_logo.PNG")
+            if os.path.exists(bird_logo_source):
+                bird_logo_dest = os.path.join(menu_dir, "bird_logo.PNG")
+                try:
+                    shutil.copy2(bird_logo_source, bird_logo_dest)
+                    self.update_status("✅ Copied bird logo")
+                except Exception as e:
+                    self.update_status(f"⚠️ Failed to copy bird logo: {e}")
         
         pyqt5_menu_code = '''import sys
 import os
@@ -3401,7 +3408,7 @@ from PyQt5.QtMultimediaWidgets import QVideoWidget
 # Set the AppUserModelID to ensure proper icon in taskbar
 try:
     import ctypes
-    myappid = 'company.game.{game_title.replace(" ", "")}.1.0'
+    myappid = 'company.game.''' + safe_title.replace(" ", "") + '''.1.0'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
@@ -3740,7 +3747,7 @@ class GameMenu(QtWidgets.QWidget):
         self.init_ui()
     
     def init_ui(self):
-        self.setWindowTitle("''' + game_title + '''")
+        self.setWindowTitle("''' + safe_title + '''")
         
         # 4K scaling support
         app = QtWidgets.QApplication.instance()
@@ -3924,7 +3931,7 @@ class GameMenu(QtWidgets.QWidget):
             except Exception:
                 pass
                 # Fallback to text
-                title_label = QtWidgets.QLabel("''' + game_title.upper() + '''")
+                title_label = QtWidgets.QLabel("''' + safe_title.upper() + '''")
                 title_label.setStyleSheet("""
                     color: white;
                     font-size: """ + str(int(36 * self.scale_factor)) + """px;
@@ -3937,7 +3944,7 @@ class GameMenu(QtWidgets.QWidget):
                 left_layout.addWidget(title_label)
         else:
             # No logo found, use text
-            title_label = QtWidgets.QLabel("''' + game_title.upper() + '''")
+            title_label = QtWidgets.QLabel("''' + safe_title.upper() + '''")
             title_label.setStyleSheet("""
                 color: white;
                 font-size: """ + str(int(36 * self.scale_factor)) + """px;
