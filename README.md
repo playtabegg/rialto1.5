@@ -90,6 +90,8 @@ Contributions welcome! Please:
 
 ## Credits
 
-Built with love by [Chandler](https://x.com/WetheIndies) at We the Indies.
+Built with love by Chandler at [We the Indies](https://x.com/WetheIndies).
 
 Keep physical media alive. Keep creating.
+
+Originally built over three months using GPT-4. Polished and packaged for the masses by Claude Code and Opus 4.6.
