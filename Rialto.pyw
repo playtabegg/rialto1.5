@@ -4283,11 +4283,29 @@ class GameMenu(QtWidgets.QWidget):
     def launch_game(self):
         # Find the main game executable dynamically
         game_exe = None
-        exclude_exes = ['setup.exe', 'unins000.exe', 'unitycrashhandler64.exe', 'menu.exe']
+        exclude_exes = ['setup.exe', 'unins000.exe', 'unins001.exe', 'menu.exe',
+                        'unitycrashhandler64.exe', 'unitycrashhandler32.exe',
+                        'createdump.exe', 'crashpad_handler.exe',
+                        'vcredist_x64.exe', 'vcredist_x86.exe', 'dotnet.exe']
         
         try:
-            for file in os.listdir(self.game_dir):
-                if file.lower().endswith('.exe') and file.lower() not in exclude_exes:
+            files = os.listdir(self.game_dir)
+            # Prefer the standard 'game.exe' entry point when present
+            for file in files:
+                if file.lower() == 'game.exe':
+                    game_exe = os.path.join(self.game_dir, file)
+                    break
+            # Otherwise take the first real .exe, skipping runtime/helper exes
+            if not game_exe:
+                for file in files:
+                    low = file.lower()
+                    if not low.endswith('.exe'):
+                        continue
+                    if low in exclude_exes:
+                        continue
+                    # CefSharp/Chromium render + GPU subprocess helpers exit instantly
+                    if 'browsersubprocess' in low or low.startswith('cefsharp'):
+                        continue
                     game_exe = os.path.join(self.game_dir, file)
                     break
         except OSError:
