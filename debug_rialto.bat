@@ -24,7 +24,11 @@ if exist "%RIALTO_DIR%\python39\" (
 set "VENV_DIR=%RIALTO_DIR%\venv"
 set "PY_BOOTSTRAP=python"
 
-where python >nul 2>nul
+:: `where python` is not enough on its own. A clean Windows 10/11 ships an
+:: App Execution Alias at %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe;
+:: `where` finds it and reports success, but it is only a Store placeholder
+:: that cannot run anything. Actually running Python is the reliable test.
+python -c "import sys" >nul 2>nul
 if errorlevel 1 (
     echo.
     echo [ERROR] Python was not found on your PATH.
@@ -33,6 +37,10 @@ if errorlevel 1 (
     echo   Download it from: https://www.python.org/downloads/
     echo   Tick "Add python.exe to PATH" in the installer, then
     echo   open a new window and run this file again.
+    echo.
+    echo   If you just saw a message about the Microsoft Store, or about
+    echo   "App execution aliases", that placeholder is all you have -
+    echo   install the real Python from the link above.
     echo.
     pause
     exit /b 1
