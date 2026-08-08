@@ -1,14 +1,17 @@
 # Rialto - Game Disc Builder
 # Core dependencies
+#
+# Tested on Python 3.9 - 3.12 (64-bit) on Windows 10/11.
+# Versions are pinned so a fresh clone installs a combination known to work.
 
 # Image processing
-pillow
+pillow>=10,<12
 
-# Application packaging
-pyinstaller
+# GUI framework for the generated disc menus
+PyQt5==5.15.11
 
-# GUI framework for advanced menus
-PyQt5
+# Windows-specific functionality (drive detection, shortcuts)
+pywin32>=306
 
-# Windows-specific functionality
-pywin32
+# Application packaging (rialto.spec / PyInstaller builds)
+pyinstaller>=6,<7

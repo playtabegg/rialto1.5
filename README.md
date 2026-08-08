@@ -18,18 +18,19 @@ Built by [We the Indies](https://wetheindies.com). Free and open-source.
 ## Prerequisites
 
 - **Windows 10/11**
-- **Python 3.9+** (bundled in `python39/` or install separately)
+- **Python 3.9+ (64-bit)** from [python.org](https://www.python.org/downloads/), installed with **"Add python.exe to PATH"** ticked. 3.9 - 3.12 is the tested range. See [Troubleshooting](#troubleshooting--python-note) before you start.
 - **Inno Setup 6**: [Download](https://jrsoftware.org/isdl.php) (required for installer creation)
 - **mkisofs** or **oscdimg**: for ISO creation (recommended, has basic Python fallback)
 
 ## Quick Start
 
-1. Clone this repository
-2. Double-click `launch_rialto.bat` (sets up venv and launches automatically)
-3. Select your game folder under `input/`
-4. Fill in game metadata (title, developer, etc.)
-5. Click **Build Installer + ISO**
-6. Find your ISO in `output/`
+1. Install Python 3.9+ with **"Add python.exe to PATH"** ticked
+2. Clone this repository
+3. Double-click `launch_rialto.bat` (creates `venv/`, installs dependencies, then launches Rialto)
+4. Select your game folder under `input/`
+5. Fill in game metadata (title, developer, etc.)
+6. Click **Build Installer + ISO**
+7. Find your ISO in `output/`
 
 ## Usage
 
@@ -59,14 +60,25 @@ input/
 
 Rialto supports optional code signing via [SSL.com eSigner](https://www.ssl.com/esigner/). During the build flow, Rialto will pause and prompt you to sign your installer manually through the eSigner web interface.
 
+## Troubleshooting / Python note
+
+**Rialto needs Python 3.9 or newer (64-bit), installed from [python.org](https://www.python.org/downloads/) with "Add python.exe to PATH" ticked on the first page of the installer.** 3.9 - 3.12 is the range Rialto is developed and tested against; newer releases generally work but are not tested, so if a dependency refuses to install, drop back to 3.12. If you already installed Python without the PATH option, re-run the installer, choose *Modify*, and enable it.
+
+**What `launch_rialto.bat` does on first run:** it looks for Python on your PATH, creates a virtual environment in a `venv/` folder next to the script, installs everything in `requirements.txt` into it, drops a `venv\rialto_deps_ok.txt` marker, and starts Rialto. Later runs see the marker and skip straight to launching, so only the first run is slow. To force a clean reinstall, delete the `venv/` folder and run the script again. `debug_rialto.bat` does exactly the same thing but runs Rialto with a console window attached so you can read any error.
+
+**If the window closes instantly or nothing happens:** run `debug_rialto.bat` instead and read the message. Both scripts now pause on every error rather than vanishing.
+
+**Disclaimer:** Rialto is a free hobby project, offered as-is with no warranty (see [LICENSE](LICENSE)). It is developed and tested on Windows 10/11 with Python 3.9 - 3.12; other setups may not work. It writes only inside its own folder and the `input/`/`output/` folders, and it never uploads your game anywhere. Always keep your own backup of your game files, and check the ISO it produces before you send a disc to a duplicator. Bug reports are very welcome on the [issue tracker](https://github.com/playtabegg/rialto1/issues).
+
 ## Project Structure
 
 ```
 rialto_v1/
   Rialto.pyw              # Main application
-  launch_rialto.bat        # Setup + launch script
-  debug_rialto.bat         # Launch with console output
+  launch_rialto.bat        # Setup + launch script (creates venv/ on first run)
+  debug_rialto.bat         # Same, but launches with console output
   requirements.txt         # Python dependencies
+  venv/                    # Created on first launch, not in the repo
   config.json              # App configuration
   rialto.spec              # PyInstaller build spec
   assets/
