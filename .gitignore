@@ -52,3 +52,8 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+# Environment files — never commit secrets
+.env
+.env.*
+!.env.example
