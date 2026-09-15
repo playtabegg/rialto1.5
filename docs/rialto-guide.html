@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rialto 1.5 &middot; The Manual</title>
+<style>
+/* ============================================================
+   Rialto manual. Offline, single file, nothing fetched.
+   Look: the booklet that came in a big cardboard PC game box.
+   Newsprint stock, CMYK spot colour, registration marks,
+   condensed display type. Prints on three sheets of A4/Letter.
+   ============================================================ */
+
+:root {
+  --paper:      #f4efe3;
+  --paper-2:    #ebe4d4;
+  --ink:        #191612;
+  --ink-soft:   #5b5347;
+  --rule:       #d3c9b4;
+  --red:        #cf3418;
+  --cyan:       #17798e;
+  --yellow:     #d99b06;
+  --shadow:     rgba(25, 22, 18, .14);
+  --display: "Bahnschrift Condensed", "Bahnschrift", "Franklin Gothic Medium",
+             "Arial Narrow", system-ui, sans-serif;
+  --body:    Constantia, Cambria, "Palatino Linotype", Georgia, serif;
+  --mono:    Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:    #14120e;
+    --paper-2:  #1c1915;
+    --ink:      #ece3d2;
+    --ink-soft: #9d9484;
+    --rule:     #35302a;
+    --red:      #ff6144;
+    --cyan:     #4fbdd4;
+    --yellow:   #f5c342;
+    --shadow:   rgba(0, 0, 0, .5);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.62;
+  /* Halftone: the dot screen of a cheap two-colour print job. */
+  background-image:
+    radial-gradient(var(--rule) .6px, transparent .7px),
+    radial-gradient(var(--rule) .6px, transparent .7px);
+  background-size: 14px 14px, 14px 14px;
+  background-position: 0 0, 7px 7px;
+}
+
+/* ---------- sheet ---------- */
+
+.sheet {
+  max-width: 60rem;
+  margin: 0 auto 3rem;
+  padding: 0 2.5rem 3rem;
+  background: var(--paper);
+  box-shadow: 0 1px 0 var(--rule), 0 24px 48px -32px var(--shadow);
+  position: relative;
+}
+
+/* Registration crosshairs, one per corner. Pure decoration, and the
+   single detail that says "print shop" more than any word. */
+.sheet::before, .sheet::after {
+  content: "";
+  position: absolute;
+  width: 22px; height: 22px;
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) center/100% 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) center/1px 100% no-repeat;
+  opacity: .55;
+}
+.sheet::before { top: 14px;    left: 14px;  }
+.sheet::after  { bottom: 14px; right: 14px; }
+
+.sheet-no {
+  position: absolute;
+  top: 18px; right: 26px;
+  font-family: var(--display);
+  font-size: .72rem;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  padding: 3.4rem 0 1.2rem;
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 1.6rem;
+  align-items: center;
+}
+
+.disc {
+  width: 92px; height: 92px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, var(--paper) 0 13%, transparent 13.5%),
+    conic-gradient(from 210deg, var(--cyan), var(--yellow), var(--red), var(--cyan));
+  box-shadow: inset 0 0 0 2px var(--ink), 0 6px 18px -10px var(--shadow);
+  position: relative;
+}
+.disc::after {
+  content: "";
+  position: absolute; inset: 13px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.35);
+}
+
+h1 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(2.8rem, 8vw, 4.6rem);
+  line-height: .88;
+  letter-spacing: -.01em;
+  text-transform: uppercase;
+  margin: 0;
+}
+h1 em {
+  font-style: normal;
+  color: var(--red);
+}
+
+.kicker {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .28em;
+  font-size: .74rem;
+  color: var(--ink-soft);
+  margin: 0 0 .5rem;
+}
+
+.standfirst {
+  font-size: 1.12rem;
+  max-width: 46ch;
+  margin: .7rem 0 0;
+  color: var(--ink-soft);
+}
+
+.bar {
+  height: 9px;
+  margin: 1.6rem 0 2.2rem;
+  background: linear-gradient(90deg,
+    var(--red) 0 34%, var(--yellow) 34% 58%, var(--cyan) 58% 100%);
+}
+
+/* ---------- contents ---------- */
+
+.contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem 1.6rem;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: .78rem;
+  padding-bottom: 1.6rem;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 2.2rem;
+}
+.contents a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  padding-bottom: 2px;
+  transition: border-color .15s, color .15s;
+}
+.contents a:hover { color: var(--red); border-bottom-color: var(--red); }
+
+/* ---------- headings ---------- */
+
+h2 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 2rem;
+  text-transform: uppercase;
+  letter-spacing: .01em;
+  margin: 2.8rem 0 .2rem;
+  padding-bottom: .35rem;
+  border-bottom: 3px solid var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: .8rem;
+}
+h2 span {
+  font-size: .74rem;
+  letter-spacing: .2em;
+  color: var(--red);
+  margin-left: auto;
+}
+
+h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.12rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  margin: 1.9rem 0 .3rem;
+}
+
+p { margin: .55rem 0; }
+p.lede { font-size: 1.06rem; }
+
+/* ---------- steps ---------- */
+
+.steps { margin: 1.6rem 0 0; }
+
+.step {
+  display: grid;
+  grid-template-columns: 4.4rem 1fr;
+  gap: 1.2rem;
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--rule);
+  align-items: start;
+}
+.step:last-child { border-bottom: 1px solid var(--rule); }
+
+.step .num {
+  font-family: var(--display);
+  font-size: 3.2rem;
+  line-height: .8;
+  font-weight: 600;
+  color: transparent;
+  -webkit-text-stroke: 1.5px var(--red);
+  text-align: right;
+}
+.step h3 { margin-top: 0; }
+.step p { margin: .2rem 0 0; }
+
+/* ---------- notes and callouts ---------- */
+
+.note {
+  margin: 1.2rem 0;
+  padding: .85rem 1.1rem;
+  background: var(--paper-2);
+  border-left: 5px solid var(--cyan);
+  font-size: .95rem;
+}
+.note.warn  { border-left-color: var(--red); }
+.note.tip   { border-left-color: var(--yellow); }
+.note strong {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-size: .76rem;
+  display: block;
+  margin-bottom: .15rem;
+  color: var(--ink-soft);
+}
+
+/* ---------- tables ---------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.1rem 0;
+  font-size: .94rem;
+}
+caption {
+  text-align: left;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  font-size: .72rem;
+  color: var(--ink-soft);
+  padding-bottom: .4rem;
+}
+th {
+  text-align: left;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-size: .74rem;
+  font-weight: 600;
+  border-bottom: 2px solid var(--ink);
+  padding: .35rem .7rem .35rem 0;
+}
+td {
+  padding: .5rem .7rem .5rem 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) { background: var(--paper-2); }
+td:first-child, th:first-child { padding-left: .5rem; }
+td:first-child { font-family: var(--display); letter-spacing: .02em; }
+
+/* ---------- two column ---------- */
+
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 2.4rem;
+}
+@media (max-width: 46rem) {
+  .cols { grid-template-columns: 1fr; }
+  .sheet { padding: 0 1.2rem 2rem; }
+  .masthead { grid-template-columns: 1fr; }
+}
+
+code, kbd {
+  font-family: var(--mono);
+  font-size: .88em;
+  background: var(--paper-2);
+  padding: .08em .35em;
+  border: 1px solid var(--rule);
+}
+
+.folder {
+  font-family: var(--mono);
+  font-size: .9rem;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  padding: 1rem 1.2rem;
+  margin: 1rem 0;
+  line-height: 1.75;
+  white-space: pre;
+  overflow-x: auto;
+}
+.folder b { color: var(--red); font-weight: 600; }
+.folder i { color: var(--ink-soft); font-style: normal; }
+
+.colophon {
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 3px solid var(--ink);
+  font-size: .84rem;
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem 2rem;
+  justify-content: space-between;
+}
+.colophon strong { color: var(--ink); }
+
+/* ---------- print ---------- */
+
+@media print {
+  :root {
+    --paper: #fff; --paper-2: #f2f2f2; --ink: #000;
+    --ink-soft: #444; --rule: #bbb; --shadow: transparent;
+  }
+  body { background-image: none; font-size: 10.5pt; }
+  .sheet {
+    box-shadow: none;
+    max-width: none;
+    margin: 0;
+    padding: 0 0 0 0;
+    page-break-after: always;
+  }
+  .sheet:last-of-type { page-break-after: auto; }
+  .sheet::before, .sheet::after { display: none; }
+  .contents { display: none; }
+  .masthead { padding-top: 0; }
+  h2 { page-break-after: avoid; }
+  .step, .note, table { page-break-inside: avoid; }
+  a { color: #000; text-decoration: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ================= SHEET 1 ================= -->
+<section class="sheet" id="start">
+  <div class="sheet-no">Sheet 1 of 3</div>
+
+  <header class="masthead">
+    <div class="disc" aria-hidden="true"></div>
+    <div>
+      <p class="kicker">We the Indies &middot; Disc Builder &middot; Version 1.5</p>
+      <h1>Rialto<em>.</em></h1>
+      <p class="standfirst">Your finished Windows game goes in. A disc image comes out,
+      with a menu, an installer, an icon and everything a boxed copy needs.</p>
+    </div>
+  </header>
+
+  <div class="bar" aria-hidden="true"></div>
+
+  <nav class="contents">
+    <a href="#three">Three steps</a>
+    <a href="#need">What you need</a>
+    <a href="#folder">Your game folder</a>
+    <a href="#fields">Every field</a>
+    <a href="#extras">Disc extras</a>
+    <a href="#media">Discs and sizes</a>
+    <a href="#trouble">When it goes wrong</a>
+    <a href="#specs">The fine print</a>
+  </nav>
+
+  <h2 id="three">Three steps<span>01</span></h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <div>
+        <h3>Point Rialto at your game</h3>
+        <p>Put the game in a folder of its own, anywhere on your PC, then hit
+        <b>Browse for your game folder</b> at the top of the window. Everything below it
+        starts looking in that folder from then on.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div>
+        <h3>Fill in the name and the art</h3>
+        <p>Title, developer, a background, a logo, an icon. Type the title and half the
+        other boxes fill themselves in. Hover any field to be told exactly what it wants.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div>
+        <h3>Preview, then build</h3>
+        <p><b>Preview Disc Menu</b> opens the real menu in a few seconds so you can look at it
+        before committing. Then <b>Build Game Installer</b>. Your ISO lands in the
+        <code>output</code> folder, ready for any disc writing tool.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note tip">
+    <strong>The bar along the bottom</strong>
+    A small disc fills up as you go, showing how much of your chosen media the
+    game takes. It measures your folder before compression, so the finished ISO
+    is usually a little smaller than the number shown.
+  </div>
+
+  <h2 id="need">What you need<span>02</span></h2>
+
+  <div class="cols">
+    <div>
+      <h3>On your PC</h3>
+      <table>
+        <tbody>
+          <tr><td>Windows</td><td>10 or 11</td></tr>
+          <tr><td>Inno Setup 6</td><td>Free. Builds the installer. Version 6, not 7.<br><code>jrsoftware.org/isdl.php</code></td></tr>
+          <tr><td>An ISO tool</td><td><code>oscdimg</code> from the Windows ADK (Deployment Tools), or <code>mkisofs</code> on your PATH. Rialto finds both.</td></tr>
+          <tr><td>Python</td><td>Only if you run from source. The release build carries its own.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3>From you</h3>
+      <table>
+        <tbody>
+          <tr><td>The game</td><td>A finished Windows build that runs from its own folder</td></tr>
+          <tr><td>Background</td><td>An animated GIF or a still JPG, at 1280x720</td></tr>
+          <tr><td>Game logo</td><td>Transparent PNG, around 400x150</td></tr>
+          <tr><td>Icons</td><td>.ico files at 256x256. <code>icoconvert.com</code> turns a PNG into one.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Two files, one folder</strong>
+    A release download gives you <code>Rialto.exe</code> and <code>menu.exe</code>. Keep them in
+    the same folder. <code>menu.exe</code> is the disc menu Rialto puts on every disc it makes;
+    without it beside Rialto, builds fall back to a plain text menu.
+  </div>
+
+  <h2 id="folder">Your game folder<span>03</span></h2>
+
+  <p>There is no required layout. Rialto reads the folder as it finds it and works out
+  which file is the game. Three folder names mean something extra if you use them:</p>
+
+  <div class="folder">MyGame\
+   <b>game.exe</b>              <i>or whatever your game is actually called</i>
+   Data\, Engine\, etc.  <i>everything your game needs, untouched</i>
+   <b>bonus\</b>                <i>soundtrack, art, the design doc: a BONUS button</i>
+   <b>mods\</b>                 <i>a mod manager exe: a MODS button</i>
+</div>
+
+  <p>Both of those can also be pointed at a folder anywhere else on your PC from
+  <b>Disc</b>, <b>Disc Extras</b>, which has buttons that make them for you in the
+  right place.</p>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; We the Indies&trade; &middot; MIT licensed</span>
+    <span>Continued on sheet 2</span>
+  </div>
+</section>
+
+<!-- ================= SHEET 2 ================= -->
+<section class="sheet">
+  <div class="sheet-no">Sheet 2 of 3</div>
+
+  <h2 id="fields" style="margin-top:4.9rem">Every field, in order<span>04</span></h2>
+
+  <h3>Metadata</h3>
+  <table>
+    <caption>What each box does, and what fills it in for you</caption>
+    <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td>Game Title</td><td>What players see on the installer and the disc menu. Typing it also fills in Start Menu Name and Disc Name.</td></tr>
+      <tr><td>Developer</td><td>You, your studio, or your team.</td></tr>
+      <tr><td>Publisher</td><td>Only if somebody else is publishing. Leave it empty and the copyright line follows Developer instead.</td></tr>
+      <tr><td>Start Menu Name</td><td>The name in the Windows Start Menu. Follows the title until you type your own.</td></tr>
+      <tr><td>Copyright Text</td><td>The line on the installer. Built from Publisher, or Developer when Publisher is empty.</td></tr>
+      <tr><td>Disc Name</td><td>The label File Explorer shows when the disc goes in, like a DVD name. 16 characters is the safe limit.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Disc</h3>
+  <table>
+    <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td>Games on Disc</td><td>Leave it on auto-detect for a normal single-game disc. Tick two or more games under <b>Configure</b> and players get a "choose your game" screen: double features, demo collections, anthologies.</td></tr>
+      <tr><td>Target Media</td><td>The disc you plan to write. If the game will not fit, Rialto splits the installer and builds a numbered multi-disc set on its own.</td></tr>
+      <tr><td>Disc Extras</td><td>Bonus content, mods, an Add to Steam button, Mac and Linux builds. All optional. See below.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Artwork</h3>
+  <table>
+    <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td>Menu Background</td><td>The disc menu's backdrop. An animated GIF is the sweet spot: it loops, it is small, and <code>ezgif.com</code> makes one out of a video clip in a minute.</td></tr>
+      <tr><td>Game Logo</td><td>Front and centre on the menu. Transparent PNG.</td></tr>
+      <tr><td>Company Logo</td><td>Bottom corner of the menu. Small transparent PNG, around 150x75.</td></tr>
+      <tr><td>Game Icon</td><td>The installer, the Start Menu entry, the desktop shortcut. A 256x256 .ico.</td></tr>
+      <tr><td>Disc Icon</td><td>What File Explorer shows on the drive. Usually the same file as Game Icon, but it is a separate box because it does not have to be.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="extras">Disc extras<span>05</span></h2>
+
+  <p class="lede">Everything in this dialog is off or empty by default. Your disc builds
+  fine without any of it.</p>
+
+  <div class="cols">
+    <div>
+      <h3>Bonus content</h3>
+      <p>Soundtracks, wallpapers, concept art, the design document, a thank-you letter.
+      It becomes a <b>BONUS</b> button on the disc menu that opens the folder.
+      <b>Create Bonus Folder</b> makes one inside your game folder and opens it in Explorer.</p>
+
+      <h3>Mods</h3>
+      <p>Drop a mod manager or loader .exe into a <code>mods</code> folder and tick the box.
+      The folder rides along on the disc and a <b>MODS</b> button on the menu runs the tool,
+      from the disc and after installing. Rialto finds the exe for you.</p>
+
+      <h3>Compatibility mode</h3>
+      <p>A second play button on the menu that starts the game with a launch argument already
+      set, so a player on older hardware does not have to know the argument exists. Type
+      exactly what you would type after the .exe, such as <code>-opengl</code>. Then say in
+      one sentence what it does, in their words, and the menu shows that when they hover the
+      button. Only worth ticking if your game already reads the argument.</p>
+    </div>
+    <div>
+      <h3>Steam</h3>
+      <p>After players install, the menu can offer one click to add the game to their Steam
+      library as a non-Steam game. If Steam is open, the menu asks them to exit it completely and
+      press the button again.</p>
+
+      <h3>Mac and Linux</h3>
+      <p>Only if you built them. Point at a plain build folder, the one you would have zipped
+      up yourself, and Rialto packs it into an archive that carries the file permissions a
+      disc cannot. The player copies it off the disc, opens it, and plays: <b>no Terminal and
+      nothing to type</b>. Already made a .dmg, a .zip or an .AppImage? Point at the folder
+      holding it and Rialto ships it exactly as it is.</p>
+      <p>Windows players get <code>setup.exe</code> and the menu, Mac players get a
+      <code>Mac</code> folder, Linux players get a <code>Linux</code> folder. The disc's
+      <code>README.txt</code> carries the real steps for all three side by side, naming the
+      file to copy and what to do once it is open, so nobody has to read a second file to
+      find out which buttons to press. Each folder still has its own <b>START HERE.txt</b>
+      for anyone who copies the folder on its own, and only the platforms actually on the
+      disc are named.</p>
+    </div>
+  </div>
+
+  <h2 id="media">Discs and sizes<span>06</span></h2>
+
+  <table>
+    <caption>Pick the media you actually own. Rialto keeps 96 MB free on each disc for the menu, the setup stub and the filesystem.</caption>
+    <thead><tr><th style="width:16rem">Target Media</th><th style="width:7rem">Capacity</th><th>Worth knowing</th></tr></thead>
+    <tbody>
+      <tr><td>Auto (single disc)</td><td>no limit</td><td>One image, any size. No splitting, no capacity check.</td></tr>
+      <tr><td>CD 700 MB</td><td>0.74 GB</td><td>Small games and soundtracks.</td></tr>
+      <tr><td>DVD 4.7 GB</td><td>4.7 GB</td><td>The default for a game disc.</td></tr>
+      <tr><td>DVD DL 8.5 GB</td><td>8.5 GB</td><td>Dual layer. Slower to write, widely readable.</td></tr>
+      <tr><td>M-DISC DVD 4.7 GB</td><td>4.7 GB</td><td>Same capacity, inorganic recording layer, rated for centuries. Needs an M-DISC capable writer.</td></tr>
+      <tr><td>Blu-ray 25 / 50 GB</td><td>25 / 50 GB</td><td>Needs a Blu-ray writer at both ends.</td></tr>
+      <tr><td>M-DISC Blu-ray 25 / 50 GB</td><td>25 / 50 GB</td><td>The archival version of the same discs.</td></tr>
+      <tr><td>Blu-ray XL 66 GB</td><td>66 GB</td><td>Triple layer, the same family 4K UHD discs come from.</td></tr>
+      <tr><td>Blu-ray XL 100 GB</td><td>100 GB</td><td>Also sold as M-DISC. Check your writer supports BDXL.</td></tr>
+      <tr><td>Blu-ray XL 128 GB</td><td>128 GB</td><td>Quad layer BD-R. The largest optical disc there is.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Over 4 GB in one file</strong>
+    Rialto switches the disc to UDF automatically when any single file passes 4 GB,
+    because the older ISO 9660 filesystem cannot describe one.
+  </div>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; We the Indies&trade;</span>
+    <span>Continued on sheet 3</span>
+  </div>
+</section>
+
+<!-- ================= SHEET 3 ================= -->
+<section class="sheet">
+  <div class="sheet-no">Sheet 3 of 3</div>
+
+  <h2 id="trouble" style="margin-top:4.9rem">When it goes wrong<span>07</span></h2>
+
+  <table>
+    <thead><tr><th style="width:19rem">What you see</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Preview says it cannot find menu.exe</td>
+        <td>You have <code>Rialto.exe</code> but not <code>menu.exe</code>. Both come in the release zip; unzip the whole folder and keep them together.</td>
+      </tr>
+      <tr>
+        <td>Nothing happens on double-click (source checkout)</td>
+        <td><code>Rialto.pyw</code> runs windowless, so a startup error has nowhere to print. Run <code>debug_rialto.bat</code> instead: same thing, with a console, and it pauses on every error.</td>
+      </tr>
+      <tr>
+        <td>Windows says Python is installed but Rialto disagrees</td>
+        <td>A clean Windows ships a placeholder at <code>%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe</code> that only opens the Store. Install the real one from python.org with "Add python.exe to PATH" ticked.</td>
+      </tr>
+      <tr>
+        <td>The build stops at the installer step</td>
+        <td>Inno Setup 6 is missing. Install it, in either install mode, and try again. Inno Setup 7 on its own is not enough: Rialto 1.5 builds with 6.</td>
+      </tr>
+      <tr>
+        <td>No ISO at the end</td>
+        <td>Rialto found neither <code>oscdimg</code> nor <code>mkisofs</code>, or the one it found failed (the log says which). Install the Windows ADK with Deployment Tools ticked, or put <code>mkisofs</code> on your PATH.</td>
+      </tr>
+      <tr>
+        <td>The disc menu says the game executable was not found</td>
+        <td>Click Play once more first: a freshly installed folder is sometimes still being scanned. If it persists, open <b>Games on Disc</b> in Rialto, tick your game's exe by hand and rebuild. That writes the exact path into the disc menu instead of leaving it to find one.</td>
+      </tr>
+      <tr>
+        <td>A disc in the set is bigger than the media</td>
+        <td>Disc 1 always carries the menu, the setup stub and the extras, however big those are. Move to larger media or trim the bonus folder.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="specs">The fine print<span>08</span></h2>
+
+  <div class="cols">
+    <div>
+      <h3>What lands in output</h3>
+      <p>One <code>.iso</code> per disc, named after your game. Everything else Rialto used to
+      build it is cleaned up. Write the ISO with any disc writing tool.</p>
+
+      <h3>What the disc contains</h3>
+      <p><code>setup.exe</code> and its data slices, a <code>menu\</code> folder holding the disc menu
+      and its artwork, <code>autorun.inf</code>, the disc icon, a readme, and your bonus and mods
+      folders if you used them.</p>
+
+      <h3>Where it installs</h3>
+      <p><code>C:\Games\&lt;Your Game&gt;</code> by default, changeable by the player at install
+      time. Uninstall is a normal Windows uninstall, from Settings or from the disc menu.</p>
+
+      <h3>Languages</h3>
+      <p>The installer offers 21 languages. The disc menu offers 34. It opens in the
+      language the disc was built with, and the player can switch.</p>
+    </div>
+    <div>
+      <h3>Profiles</h3>
+      <p><b>File</b>, <b>Save Profile</b> writes every setting to a <code>.json</code> in
+      <code>templates\</code>. Rialto reloads the last one you used on the next start, so building
+      the same game twice is two clicks.</p>
+
+      <h3>Signing</h3>
+      <p>Optional, and you bring your own account. Windows keeps a list of publishers it
+      trusts; signing puts your studio on it, so the install prompt says who made the game
+      instead of "Unknown Publisher". About $10 a month. Skip it and everything still
+      builds. <b>Configure Signing</b> is in the bar along the bottom, and the signing
+      guide covers the whole setup.</p>
+
+      <h3>White label</h3>
+      <p><b>Remove WTI Branding</b> takes the We the Indies bird and wordmark off your disc
+      menu, so the disc carries only your own. No charge, no strings, no attribution needed.</p>
+
+      <h3>Controllers</h3>
+      <p>The disc menu is fully navigable with a gamepad, because a disc very often ends up
+      in a machine plugged into a television.</p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <strong>Check the disc before you send it anywhere</strong>
+    Rialto is free software offered as-is, with no warranty. It keeps its settings and builds
+    in its own folder, uses Windows' temp folder while it works, and never uploads your game.
+    Keep your own backup, and test the ISO before it goes to a duplicator.
+  </div>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; Built by Chandler at We the Indies&trade; &middot; MIT licensed &middot; wetheindies.com</span>
+    <span>Keep physical media alive.</span>
+  </div>
+</section>
+
+</body>
+</html>

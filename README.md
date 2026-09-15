@@ -1,110 +1,89 @@
-# Rialto - Game Disc Builder
+# Rialto 1.5
 
-**Create professional game disc ISOs for indie games.** Rialto automates the entire pipeline: game files in, ready-to-burn ISO out, complete with installer, menus, and bonus content.
+Turn your finished Windows game into a real disc: an autorun menu with your art, a proper installer, a disc icon and a ready-to-write ISO. Drop it in a drive and it feels like the games you grew up with.
 
-Built by [We the Indies](https://wetheindies.com). Free and open-source.
+Free and open source, built by [We the Indies](https://wetheindies.com).
 
----
+**[Download Rialto 1.5](https://github.com/playtabegg/rialto1.5/releases/latest)** · [Signing guide](SIGNING.md) · The manual opens from **Help Guide** inside Rialto
 
-## Features
+## Easier from the very first minute
 
-- **One-click ISO creation**: select your game folder, fill in metadata, hit Build
-- **Professional installers**: Inno Setup with 21+ language support, Start Menu entries, uninstaller
-- **Custom game menus**: PyQt5-powered launcher with background images/videos, logo, language selection, and bonus content
-- **Dark/Light themes**: modern UI with custom title bar
-- **Profile system**: save and reuse build configurations
-- **Optional code signing**: pause-and-sign flow works with any signing service for signed installers
+- Double-click `Rialto.exe` and everything works. No Python, and nothing to install for Rialto itself.
+- Choose **File > Put Rialto on the Desktop** and launch Rialto like any normal app.
+- Your game's exe keeps its own name. No renaming to game.exe, ever.
+- The disc's name in Windows comes from Disc Name. Keep it to 16 characters and every PC shows all of it.
+- And way more, [see below](#whats-new-in-15).
 
-## Prerequisites
+## What you need
 
-- **Windows 10/11**
-- **Python 3.9+ (64-bit)** from [python.org](https://www.python.org/downloads/), installed with **"Add python.exe to PATH"** ticked. 3.9 - 3.12 is the tested range. See [Troubleshooting](#troubleshooting--python-note) before you start.
-- **Inno Setup 6**: [Download](https://jrsoftware.org/isdl.php) (required for installer creation)
-- **mkisofs** or **oscdimg**: for ISO creation (recommended, has basic Python fallback)
+- Windows 10 or 11
+- **[Inno Setup 6](https://jrsoftware.org/isdl.php)**, free, builds the installer. Pick version **6**, not 7.
+- **An ISO tool:** `oscdimg` from the free [Windows ADK](https://learn.microsoft.com/en-us/windows-hardware/get-started/adk-install) (tick only **Deployment Tools**), or `mkisofs` on your PATH
 
-## Quick Start
+**Rialto can't install these two for you, and it needs both to build a disc.** Once they are installed, Rialto finds them by itself. The download's `IMPORTANT - Before You Build.txt` walks through every click.
 
-1. Install Python 3.9+ with **"Add python.exe to PATH"** ticked
-2. Clone this repository
-3. Double-click `launch_rialto.bat` (creates `venv/`, installs dependencies, then launches Rialto)
-4. Select your game folder under `input/`
-5. Fill in game metadata (title, developer, etc.)
-6. Click **Build Installer + ISO**
-7. Find your ISO in `output/`
+## Three steps to a disc
 
-## Usage
+1. Put your game in a folder of its own (the `input` folder is a good home), then open Rialto and Browse to it.
+2. Fill in your game's name and art. Hover over anything for help.
+3. Preview Disc Menu, then Build Game Installer. Your ISO lands in `output`. Write it to disc with any disc-writing tool and hand somebody your game.
 
-### Preparing Your Game
+Want to see a menu first? The download has a sample: click **Load Profile** and open `templates\Sample Game.json`, Browse to `input\SampleGame`, then click **Preview Disc Menu**.
 
-Place your game files in a folder under `input/`:
-```
-input/
-  MyGame/
-    MyGame.exe
-    game_icon.ico       (optional)
-    disc_icon.ico       (optional)
-    background.png      (optional - menu background)
-    game_logo.png       (optional - menu logo)
-    bonus/              (optional - bonus content folder, opened via file explorer)
-```
+## Two ways to get Rialto
 
-### Building
+- **The download.** Get `Rialto-1.5-Disc-Maker.zip` from the [latest release](https://github.com/playtabegg/rialto1.5/releases/latest), unzip the whole folder and run `Rialto.exe`. Keep `menu.exe` beside it: it is the disc menu Rialto puts on every disc. `Rialto.exe` is signed by We The Indies, LLC; `menu.exe` is unsigned on purpose, and [SIGNING.md](SIGNING.md) says why.
+- **From source.** `git clone` this repository and double-click `Rialto.pyw`. You need Python 3.9 to 3.12; Rialto installs its own packages on first run. Without a pre-built `menu.exe`, each build compiles its menu, which adds a minute or two.
 
-1. Launch Rialto
-2. Browse to your game folder
-3. Enter metadata: Title, Developer, Publisher text
-4. Optionally set background, logo, and icons
-5. Click **Build Installer + ISO**
+## What's new in 1.5
 
-### Code Signing (Optional)
+- **More than one game on a disc**, with a Choose Your Game screen in the menu
+- **Preview Disc Menu**: your real menu, before you build anything
+- **USB export** for players without a disc drive, with a Start Here file
+- **Multi-disc sets**: pick your Target Media, and a game too big for one disc splits across as many discs as it needs
+- **Blu-ray ready**: files over 4 GB switch to UDF, and the capacity check says which discs your build fits
+- **Windows, Mac and Linux on one disc**, set under Disc Extras
+- **An Add to Steam button** puts the installed game in the player's Steam library. Steam has to be closed first, and the menu tells them so
+- **Import from GOG** offline installers
+- **.msix export**, with a Start Menu entry and a clean uninstall
+- **A Mods button** that runs your game's mod tool, from the disc and after installing
+- **A Compatibility Mode button** for a second way to start, such as an OpenGL mode
+- **Bring-your-own code signing** through Azure Artifact Signing, about $10 a month: set it up once, tick Sign Final Build, and every build signs itself with your name ([signing guide](SIGNING.md))
 
-Rialto supports optional code signing via [SSL.com eSigner](https://www.ssl.com/esigner/). During the build flow, Rialto will pause and prompt you to sign your installer manually through the eSigner web interface.
+<details>
+<summary><strong>Troubleshooting and running from source</strong></summary>
 
-## Troubleshooting / Python note
+**The build stops with "ISCC.exe not found".** Install Inno Setup 6, then build again.
 
-**Rialto needs Python 3.9 or newer (64-bit), installed from [python.org](https://www.python.org/downloads/) with "Add python.exe to PATH" ticked on the first page of the installer.** 3.9 - 3.12 is the range Rialto is developed and tested against; newer releases generally work but are not tested, so if a dependency refuses to install, drop back to 3.12. If you already installed Python without the PATH option, re-run the installer, choose *Modify*, and enable it.
+**The build stops and says it found Inno Setup 7.** Rialto 1.5 builds with Inno Setup 6. Install 6 as well; the two sit side by side.
 
-**What `launch_rialto.bat` does on first run:** it looks for Python on your PATH, creates a virtual environment in a `venv/` folder next to the script, installs everything in `requirements.txt` into it, drops a `venv\rialto_deps_ok.txt` marker, and starts Rialto. Later runs see the marker and skip straight to launching, so only the first run is slow. To force a clean reinstall, delete the `venv/` folder and run the script again. `debug_rialto.bat` does exactly the same thing but runs Rialto with a console window attached so you can read any error.
+**Rialto wrote a ZIP and says no disc was made.** It couldn't find `oscdimg` or `mkisofs`, or the one it found failed; the lines above it in the log say which. Install the Windows ADK with Deployment Tools ticked.
 
-**If the window closes instantly or nothing happens:** run `debug_rialto.bat` instead and read the message. Both scripts now pause on every error rather than vanishing.
+**Preview Disc Menu can't find `menu.exe`.** Unzip the whole folder again and keep the files together.
 
-**Disclaimer:** Rialto is a free hobby project, offered as-is with no warranty (see [LICENSE](LICENSE)). It is developed and tested on Windows 10/11 with Python 3.9 - 3.12; other setups may not work. It writes only inside its own folder and the `input/`/`output/` folders, and it never uploads your game anywhere. Always keep your own backup of your game files, and check the ISO it produces before you send a disc to a duplicator. Bug reports are very welcome on the [issue tracker](https://github.com/playtabegg/rialto1/issues).
+**The download needs no Python.** `Rialto.exe` carries its own Python and packages, and never touches the Python on your PC.
 
-## Project Structure
+**Running from source** needs 64-bit Python 3.9 to 3.12 from [python.org](https://www.python.org/downloads/), installed with "Add python.exe to PATH" ticked. If the Microsoft Store opens when Python should run, you only have Windows' placeholder: install the real one. On first run Rialto asks once, then runs `pip install -r requirements.txt` into the Python that started it. There is no venv; make and activate your own if you want one. Delete the hidden `.deps_installed` file to force a reinstall. If nothing happens when you double-click `Rialto.pyw`, run `debug_rialto.bat` to see the error.
 
-```
-rialto_v1/
-  Rialto.pyw              # Main application
-  launch_rialto.bat        # Setup + launch script (creates venv/ on first run)
-  debug_rialto.bat         # Same, but launches with console output
-  requirements.txt         # Python dependencies
-  venv/                    # Created on first launch, not in the repo
-  config.json              # App configuration
-  rialto.spec              # PyInstaller build spec
-  assets/
-    bird_icon.ico          # App icon
-    bird_logo.PNG          # Brand logo
-    success.wav            # Build complete sound
-  templates/               # Build profile templates
-  input/                   # Game folders go here
-  output/                  # Built ISOs appear here
-```
+**Disclaimer.** Rialto is offered as-is, with no warranty (see [LICENSE](LICENSE)). It keeps its settings, downloads and builds in its own folder, uses Windows' temp folder while it works, and writes elsewhere only when you ask: a desktop shortcut, a USB export, or a bonus or mods folder in your game folder. It never uploads your game; code signing sends Microsoft a fingerprint of each file, never the file itself. Keep your own backup of your game, and check the ISO before you send a disc to a duplicator. Bug reports are welcome on the [issue tracker](https://github.com/playtabegg/rialto1.5/issues).
 
-## License
+</details>
 
-MIT License. See [LICENSE](LICENSE).
+## Contributors
 
-## Contributing
+<table>
+  <tr>
+    <td align="center" width="130"><a href="https://github.com/playtabegg"><img src="https://github.com/playtabegg.png?size=128" width="64" height="64" alt="Chandler"><br><b>Chandler</b></a><br><sub>We the Indies</sub></td>
+    <td align="center" width="130"><a href="https://github.com/claude"><img src="https://github.com/claude.png?size=128" width="64" height="64" alt="Claude"><br><b>Claude</b></a><br><sub>Anthropic</sub></td>
+  </tr>
+</table>
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
+Contributions are welcome: fork, branch and open a pull request. If you change `Rialto.pyw`, run `python tools-dev/run_all.py` first; the harnesses catch most breakages in a few seconds.
 
-## Credits
+## Credits and license
 
-Built with love by Chandler at [We the Indies](https://x.com/WetheIndies).
+Built with love by Chandler at [We the Indies](https://x.com/WetheIndies). Keep physical media alive. Keep creating.
 
-Keep physical media alive. Keep creating.
+MIT License, see [LICENSE](LICENSE). The sound Rialto plays when a build finishes, `assets/success.wav`, is a jingle by Hicham Chahidi (MusicScreen.org) and is not covered by the MIT License.
 
-Originally built over three months using GPT-4. Polished and packaged for the masses by Claude Code and Opus 4.6.
+Rialto Disc Maker was made over 1.5 years utilizing AI coding.

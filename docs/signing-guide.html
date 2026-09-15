@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing Your Disc &middot; Rialto 1.5</title>
+<style>
+/* ============================================================
+   Rialto signing guide. Offline, single file, nothing fetched.
+   Same press-room dressing as the main manual, turned toward
+   the one job on the page: getting your name onto the install
+   prompt. Prints on three sheets.
+   ============================================================ */
+
+:root {
+  --paper:      #f4efe3;
+  --paper-2:    #ebe4d4;
+  --ink:        #191612;
+  --ink-soft:   #5b5347;
+  --rule:       #d3c9b4;
+  --red:        #cf3418;
+  --cyan:       #17798e;
+  --yellow:     #d99b06;
+  --green:      #2c7a4b;
+  --shadow:     rgba(25, 22, 18, .14);
+  --display: "Bahnschrift Condensed", "Bahnschrift", "Franklin Gothic Medium",
+             "Arial Narrow", system-ui, sans-serif;
+  --body:    Constantia, Cambria, "Palatino Linotype", Georgia, serif;
+  --mono:    Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:    #14120e;
+    --paper-2:  #1c1915;
+    --ink:      #ece3d2;
+    --ink-soft: #9d9484;
+    --rule:     #35302a;
+    --red:      #ff6144;
+    --cyan:     #4fbdd4;
+    --yellow:   #f5c342;
+    --green:    #5fc98a;
+    --shadow:   rgba(0, 0, 0, .5);
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.62;
+  background-image:
+    radial-gradient(var(--rule) .6px, transparent .7px),
+    radial-gradient(var(--rule) .6px, transparent .7px);
+  background-size: 14px 14px, 14px 14px;
+  background-position: 0 0, 7px 7px;
+}
+
+.sheet {
+  max-width: 60rem;
+  margin: 0 auto 3rem;
+  padding: 0 2.5rem 3rem;
+  background: var(--paper);
+  box-shadow: 0 1px 0 var(--rule), 0 24px 48px -32px var(--shadow);
+  position: relative;
+}
+.sheet::before, .sheet::after {
+  content: "";
+  position: absolute;
+  width: 22px; height: 22px;
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) center/100% 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) center/1px 100% no-repeat;
+  opacity: .55;
+}
+.sheet::before { top: 14px;    left: 14px;  }
+.sheet::after  { bottom: 14px; right: 14px; }
+
+.sheet-no {
+  position: absolute;
+  top: 18px; right: 26px;
+  font-family: var(--display);
+  font-size: .72rem;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  padding: 3.4rem 0 1.2rem;
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 1.6rem;
+  align-items: center;
+}
+
+/* A wax seal, because that is what a signature is for. */
+.seal {
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255,255,255,.34), transparent 55%),
+    radial-gradient(circle at 50% 50%, var(--red) 0 62%, transparent 63%);
+  position: relative;
+  filter: drop-shadow(0 6px 14px var(--shadow));
+}
+.seal::before {
+  content: "";
+  position: absolute; inset: 17%;
+  border-radius: 50%;
+  border: 2px dashed rgba(255,255,255,.55);
+}
+.seal::after {
+  content: "\2713";
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-family: var(--display);
+  font-size: 2.6rem;
+  color: #fff;
+  line-height: 1;
+}
+
+h1 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(2.4rem, 6.4vw, 3.9rem);
+  line-height: .9;
+  letter-spacing: -.005em;
+  text-transform: uppercase;
+  margin: 0;
+}
+h1 em { font-style: normal; color: var(--red); }
+
+.kicker {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .28em;
+  font-size: .74rem;
+  color: var(--ink-soft);
+  margin: 0 0 .5rem;
+}
+
+.standfirst {
+  font-size: 1.12rem;
+  max-width: 48ch;
+  margin: .7rem 0 0;
+  color: var(--ink-soft);
+}
+
+.bar {
+  height: 9px;
+  margin: 1.6rem 0 2.2rem;
+  background: linear-gradient(90deg,
+    var(--red) 0 34%, var(--yellow) 34% 58%, var(--cyan) 58% 100%);
+}
+
+/* ---------- headings ---------- */
+
+h2 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 2rem;
+  text-transform: uppercase;
+  margin: 2.8rem 0 .2rem;
+  padding-bottom: .35rem;
+  border-bottom: 3px solid var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: .8rem;
+}
+h2 span {
+  font-size: .74rem;
+  letter-spacing: .2em;
+  color: var(--red);
+  margin-left: auto;
+}
+h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.12rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  margin: 1.9rem 0 .3rem;
+}
+p { margin: .55rem 0; }
+p.lede { font-size: 1.08rem; }
+
+/* ---------- the before / after strip ---------- */
+
+.prompt-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+  margin: 1.6rem 0;
+}
+.prompt {
+  border: 2px solid var(--rule);
+  background: var(--paper-2);
+  padding: 1rem 1.1rem;
+}
+.prompt .who {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: .72rem;
+  color: var(--ink-soft);
+  margin-bottom: .5rem;
+}
+.prompt .line {
+  font-family: var(--display);
+  font-size: 1.34rem;
+  line-height: 1.2;
+}
+.prompt.bad  { border-color: var(--yellow); }
+.prompt.bad .line  { color: var(--yellow); }
+.prompt.good { border-color: var(--green); }
+.prompt.good .line { color: var(--green); }
+.prompt small { display: block; margin-top: .5rem; color: var(--ink-soft); font-size: .86rem; }
+
+/* ---------- steps ---------- */
+
+.step {
+  display: grid;
+  grid-template-columns: 4.4rem 1fr;
+  gap: 1.2rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--rule);
+  align-items: start;
+}
+.step:last-of-type { border-bottom: 1px solid var(--rule); }
+.step .num {
+  font-family: var(--display);
+  font-size: 3rem;
+  line-height: .82;
+  font-weight: 600;
+  color: transparent;
+  -webkit-text-stroke: 1.5px var(--red);
+  text-align: right;
+}
+.step h3 { margin-top: 0; }
+.step p { margin: .2rem 0 0; }
+.step .wait {
+  display: inline-block;
+  margin-top: .45rem;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: .7rem;
+  background: var(--yellow);
+  color: #191612;
+  padding: .12rem .5rem;
+}
+
+/* ---------- notes ---------- */
+
+.note {
+  margin: 1.2rem 0;
+  padding: .85rem 1.1rem;
+  background: var(--paper-2);
+  border-left: 5px solid var(--cyan);
+  font-size: .95rem;
+}
+.note.warn { border-left-color: var(--red); }
+.note.tip  { border-left-color: var(--yellow); }
+.note strong {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-size: .76rem;
+  display: block;
+  margin-bottom: .15rem;
+  color: var(--ink-soft);
+}
+
+/* ---------- tables ---------- */
+
+table { width: 100%; border-collapse: collapse; margin: 1.1rem 0; font-size: .94rem; }
+caption {
+  text-align: left;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  font-size: .72rem;
+  color: var(--ink-soft);
+  padding-bottom: .4rem;
+}
+th {
+  text-align: left;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-size: .74rem;
+  font-weight: 600;
+  border-bottom: 2px solid var(--ink);
+  padding: .35rem .7rem .35rem 0;
+}
+td { padding: .5rem .7rem .5rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tbody tr:nth-child(even) { background: var(--paper-2); }
+td:first-child, th:first-child { padding-left: .5rem; }
+td:first-child { font-family: var(--display); }
+.pick { color: var(--green); font-weight: 600; }
+
+/* ---------- the AI prompt block ---------- */
+
+.promptbox {
+  border: 2px solid var(--ink);
+  background: var(--paper-2);
+  margin: 1.2rem 0;
+}
+.promptbox header {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  font-size: .74rem;
+  padding: .45rem .9rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.promptbox pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 26rem;
+  overflow: auto;
+}
+.copybtn {
+  font: inherit;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 .55rem;
+}
+.copybtn:hover { background: var(--red); border-color: var(--red); }
+
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 2.4rem; }
+@media (max-width: 46rem) {
+  .cols, .prompt-pair { grid-template-columns: 1fr; }
+  .sheet { padding: 0 1.2rem 2rem; }
+  .masthead { grid-template-columns: 1fr; }
+}
+
+code, kbd {
+  font-family: var(--mono);
+  font-size: .88em;
+  background: var(--paper-2);
+  padding: .08em .35em;
+  border: 1px solid var(--rule);
+}
+
+.colophon {
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 3px solid var(--ink);
+  font-size: .84rem;
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem 2rem;
+  justify-content: space-between;
+}
+.colophon strong { color: var(--ink); }
+
+@media print {
+  :root {
+    --paper: #fff; --paper-2: #f2f2f2; --ink: #000;
+    --ink-soft: #444; --rule: #bbb; --shadow: transparent;
+  }
+  body { background-image: none; font-size: 10.5pt; }
+  .sheet {
+    box-shadow: none; max-width: none; margin: 0; padding: 0;
+    page-break-after: always;
+  }
+  .sheet:last-of-type { page-break-after: auto; }
+  .sheet::before, .sheet::after { display: none; }
+  .copybtn { display: none; }
+  .promptbox pre { max-height: none; }
+  .masthead { padding-top: 0; }
+  h2 { page-break-after: avoid; }
+  .step, .note, table, .promptbox { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<!-- ================= SHEET 1 ================= -->
+<section class="sheet">
+  <div class="sheet-no">Sheet 1 of 3</div>
+
+  <header class="masthead">
+    <div class="seal" aria-hidden="true"></div>
+    <div>
+      <p class="kicker">Rialto 1.5 &middot; Code Signing</p>
+      <h1>Your name<br>on the prompt<em>.</em></h1>
+      <p class="standfirst">Windows keeps a list of publishers it trusts. Signing puts your
+      studio on it, so the install prompt says who made the game instead of showing a yellow
+      "Unknown Publisher" warning. It costs about $10 a month, you set it up once, and after
+      that every disc you make signs itself.</p>
+    </div>
+  </header>
+
+  <div class="bar" aria-hidden="true"></div>
+
+  <p class="lede">You do not need this. Bringing your own signing account is optional,
+  unsigned discs work perfectly, and plenty of people ship them. It is the difference
+  between a disc that looks homemade and one that looks like it came from a studio.</p>
+
+  <div class="prompt-pair">
+    <div class="prompt bad">
+      <div class="who">Without a signature</div>
+      <div class="line">Unknown Publisher</div>
+      <small>A yellow shield. Antivirus treats every new build as a stranger.
+      Windows 11 machines with Smart App Control can refuse it outright.</small>
+    </div>
+    <div class="prompt good">
+      <div class="who">With yours</div>
+      <div class="line">Your Studio, LLC</div>
+      <small>Your verified name. Reputation builds against your certificate across
+      every release you ever ship, and tampering breaks the signature.</small>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>One honest note about discs</strong>
+    The big SmartScreen popup only fires on files downloaded from the internet. A file on
+    a disc physically cannot carry the download marker, so disc players never see it,
+    signed or not. On a disc, signing is about the publisher's name and about antivirus.
+    If you also sell downloads, it matters a great deal more.
+  </div>
+
+  <h2>What Rialto signs<span>01</span></h2>
+
+  <div class="cols">
+    <div>
+      <h3>setup.exe</h3>
+      <p>Your installer. The file players actually run, and the one that shows the
+      publisher name on the Windows prompt.</p>
+    </div>
+    <div>
+      <h3>menu\menu.exe</h3>
+      <p>This disc's own copy of the disc menu.</p>
+    </div>
+  </div>
+
+  <p>That second one is deliberate and worth thirty seconds. Rialto is open source, and the
+  <code>menu.exe</code> shipped in its releases is the same generic file on every disc that
+  anybody builds. If it arrived pre-signed, some other studio's name would be sitting on
+  <b>your</b> disc, and your name would be sitting on discs made by people you have never met.
+  So the public copy ships unsigned on purpose, and Rialto signs <b>your</b> copy, on
+  <b>your</b> disc, with <b>your</b> account. The shared original is never touched.</p>
+
+  <div class="note tip">
+    <strong>If signing is not set up</strong>
+    Your staged <code>menu.exe</code> simply stays unsigned and the build carries on. That is
+    the normal do-it-yourself result and there is nothing wrong with it.
+  </div>
+
+  <h2>Which service, and why<span>02</span></h2>
+
+  <p>Rialto recommends one: <b>Azure Artifact Signing</b>, Microsoft's own. It was called
+  Azure Trusted Signing until January 2026, so older guides and blog posts use that name.
+  Same service.</p>
+
+  <table>
+    <caption>Against the classic route of buying a certificate from an SSL vendor</caption>
+    <thead><tr><th style="width:12rem">&nbsp;</th><th>Azure Artifact Signing</th><th>A bought certificate</th></tr></thead>
+    <tbody>
+      <tr><td>Price</td><td class="pick">about $120 a year</td><td>$220 to $530 a year</td></tr>
+      <tr><td>The private key</td><td class="pick">In Microsoft's HSM. You never see it, you cannot lose it.</td><td>On a USB dongle, required by the certificate industry since 2023. Leave it at home and you cannot ship.</td></tr>
+      <tr><td>Expiry</td><td class="pick">Certificates are minted fresh, live three days, and are timestamped. Old builds stay valid forever.</td><td>A renewal panic every one to three years.</td></tr>
+      <tr><td>Reputation</td><td class="pick">Identical. Microsoft ended the expensive-certificate fast lane in 2024.</td><td>Identical, for more money.</td></tr>
+      <tr><td>In Rialto</td><td class="pick">Configure Signing, Check My Setup, and every build signs itself.</td><td>Sign by hand at the pause.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn">
+    <strong>Start early</strong>
+    Everything on this page takes about thirty minutes of clicking except identity
+    validation, which Microsoft puts at 1 to 20 business days. Begin it before you need it.
+  </div>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; We the Indies&trade;</span>
+    <span>Continued on sheet 2</span>
+  </div>
+</section>
+
+<!-- ================= SHEET 2 ================= -->
+<section class="sheet">
+  <div class="sheet-no">Sheet 2 of 3</div>
+
+  <h2 style="margin-top:4.9rem">The setup, once<span>03</span></h2>
+
+  <p class="lede">Assume you have signed nothing before. Follow these in order. Steps 1
+  through 7 happen once in your life.</p>
+
+  <div class="note">
+    <strong>The whole thing in three steps</strong>
+    One: open an Azure account, register the Microsoft.CodeSigning provider on it, and
+    make an Artifact Signing account on the Basic plan. Two: prove who you are, and when
+    that passes, make a Public Trust certificate profile and give yourself the signer
+    role. Three: install the Azure CLI, run az login, and put three values into Rialto.
+    Step two is the long one, at 1 to 20 business days. The nine steps below are those
+    same three, one click at a time.
+  </div>
+
+
+  <div class="step">
+    <div class="num">1</div>
+    <div>
+      <h3>An Azure account with a real subscription</h3>
+      <p>Sign up at <code>portal.azure.com</code> and put a pay-as-you-go subscription on it.
+      A free trial subscription will not work with this service. You are not charged for
+      signing yet, only for what you use.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div>
+      <h3>Turn the service on for that subscription</h3>
+      <p>Search the portal for <b>Subscriptions</b>, pick yours, open <b>Resource providers</b>
+      in the left menu, find <code>Microsoft.CodeSigning</code> and click <b>Register</b>. It
+      will say NotRegistered until you do. This is the step people skip and then cannot
+      work out why nothing appears.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div>
+      <h3>Create the signing account</h3>
+      <p>Search the portal for <b>Artifact Signing Accounts</b> and click <b>Create</b>. Make a
+      new resource group, give the account a name (3 to 24 letters and numbers, globally
+      unique, starts with a letter), pick a region near you, and choose the <b>Basic</b> plan:
+      $9.99 a month for 5,000 signatures.</p>
+      <p><b>Write the region down.</b> Rialto asks for it, and an account in one region with an
+      endpoint from another fails with a 403 hours later, when everything looks correct.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <div>
+      <h3>Prove who you are</h3>
+      <p>Inside the new account, open <b>Identity validations</b> and click <b>New identity</b>,
+      then <b>Public</b>. You need the <b>Artifact Signing Identity Verifier</b> role for the
+      button to be clickable.</p>
+      <p><b>As an individual:</b> your details are pulled from the billing account on the
+      subscription, so make sure the legal name and address there are exactly what you want
+      printed on the certificate. You verify with a government photo ID and a phone camera.</p>
+      <p><b>As a company:</b> you enter the legal entity, a website on a domain you own, two
+      monitored email addresses on that domain, a business identifier and the business address.
+      A named individual at the company still does the photo ID step.</p>
+      <p>The name you enter here is the name players will see. Enter it exactly.</p>
+      <span class="wait">1 to 20 business days</span>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">5</div>
+    <div>
+      <h3>Create a certificate profile</h3>
+      <p>Once validation says Completed: <b>Certificate profiles</b>, <b>Create</b>, type
+      <b>Public Trust</b>. Name it something you will recognise, leave Program Type on None,
+      and pick your validated identity under Verified CN and O. Write the profile name down
+      too, Rialto asks for it.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">6</div>
+    <div>
+      <h3>Give yourself permission to sign</h3>
+      <p>On the signing account, open <b>Access control (IAM)</b> and give your own user the
+      role <b>Artifact Signing Certificate Profile Signer</b>. Creating the account does not
+      grant it. Without it every screen looks correct and signing fails at the last second.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">7</div>
+    <div>
+      <h3>Two free installs, then sign in</h3>
+      <p>The <b>Azure CLI</b> from <code>aka.ms/azure-cli</code>, and the <b>.NET 8 runtime</b>
+      from <code>dotnet.microsoft.com/download/dotnet/8.0</code>. You also want the
+      <b>Windows SDK</b> for <code>signtool</code>, which you probably already have if you have
+      <code>oscdimg</code> for building ISOs.</p>
+      <p>Then open a terminal and run <code>az login</code>, once. A browser window appears;
+      sign in with the same account. You will not have to do this again for a long time.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">8</div>
+    <div>
+      <h3>Tell Rialto, and check</h3>
+      <p>Click <b>Configure Signing</b>. Choose your region (which fills in the endpoint),
+      paste the account name and the certificate profile name exactly as the portal spells
+      them, and click <b>Save</b>.</p>
+      <p>Then click <b>Check My Setup</b>. It tests every item above, one line each, and marks
+      anything still to do with what to do about it. Press it again until it says
+      You are ready to sign.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">9</div>
+    <div>
+      <h3>Build</h3>
+      <p>Tick <b>Sign Final Build</b>, press <b>Build Game Installer</b> and walk away. Rialto
+      compiles the installer, signs it, signs this disc's copy of <code>menu.exe</code>,
+      verifies the signature and packs the ISO in one go. Your .msix exports get signed too.</p>
+      <p>On the first signed build only, Rialto downloads Microsoft's signing add-on, about
+      20 MB, by itself. Nothing you sign ever leaves your PC: only a fingerprint of the file
+      goes to Microsoft, and the signature comes back.</p>
+    </div>
+  </div>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; We the Indies&trade;</span>
+    <span>Continued on sheet 3</span>
+  </div>
+</section>
+
+<!-- ================= SHEET 3 ================= -->
+<section class="sheet">
+  <div class="sheet-no">Sheet 3 of 3</div>
+
+  <h2 style="margin-top:4.9rem">Rather be walked through it?<span>04</span></h2>
+
+  <p class="lede">Copy the prompt below and paste it into a desktop AI assistant: Claude,
+  ChatGPT, Grok, Kimi or similar. It takes you through the Azure portal one step at a time,
+  waits for you at each one, and finishes by handing you the three values Rialto asks for.
+  Nothing about your game is in it.</p>
+
+  <div class="promptbox">
+    <header>
+      <span>Paste this into your assistant</span>
+      <button class="copybtn" id="copy" type="button">Copy</button>
+    </header>
+    <pre id="prompt">I am an indie game developer on Windows. I want to code-sign my game's installer with Azure Artifact Signing (Microsoft renamed it from Azure Trusted Signing in January 2026 - the portal now says "Artifact Signing Accounts"). I have never signed anything before and I am not an Azure person.
+
+Walk me through it one step at a time, waiting for me to say done before moving on. Assume I know nothing about Azure. Tell me exactly what to click.
+
+Cover, in this order:
+1. Creating an Azure account with a pay-as-you-go subscription (a free trial subscription does not work for this service).
+2. Registering the Microsoft.CodeSigning resource provider on that subscription.
+3. Creating an Artifact Signing account on the Basic plan (about $9.99/month, 5,000 signatures), and how to pick the right region.
+4. Identity validation. I am an INDIVIDUAL developer, not a company - tell me what ID I need, warn me about the parts people get wrong, and tell me how long it usually takes. If I say I am a company instead, switch to the organisation path.
+5. Creating a Public Trust certificate profile once validation passes.
+6. Giving my own user the "Artifact Signing Certificate Profile Signer" role, and explaining why signing fails without it.
+7. Installing the Azure CLI and running az login.
+8. Finding the three values I have to type into my build tool: the region endpoint URL, the account name, and the certificate profile name. Tell me exactly where in the portal each one is.
+
+At the end, print those three values back to me as a labelled list so I can copy them across. If a step fails, help me diagnose it before we move on.</pre>
+  </div>
+
+  <p style="font-size:.9rem;color:var(--ink-soft)">The same prompt sits inside Rialto, under
+  Configure Signing, with a copy button next to it.</p>
+
+  <h2>Not ready to pay?<span>05</span></h2>
+
+  <table>
+    <thead><tr><th style="width:14rem">Option</th><th style="width:7rem">Cost</th><th>The honest take</th></tr></thead>
+    <tbody>
+      <tr><td>Ship unsigned</td><td>Free</td><td>Players see Unknown Publisher on install. For discs handed to friends and fans, plenty of indies live with this quite happily.</td></tr>
+      <tr><td class="pick">Azure Artifact Signing</td><td>~$120/yr</td><td>The pick. Your name, effectively unlimited builds, fully automatic inside Rialto.</td></tr>
+      <tr><td>SignPath Foundation</td><td>Free</td><td>Open source projects with public builds only, and the publisher line reads SignPath Foundation rather than your name.</td></tr>
+      <tr><td>Certum Open Source</td><td>~&euro;69</td><td>Licensed for open source only. Shows "Open Source Developer, Your Name".</td></tr>
+      <tr><td>Classic SSL vendors</td><td>$220-530/yr</td><td>No advantage left. Microsoft ended the fancy-certificate fast lane in 2024, so every certificate builds trust the same way now.</td></tr>
+      <tr><td>Your own certificate</td><td>Free</td><td>Does not help. Windows treats it exactly like unsigned, and asking players to install your personal security certificate is a genuinely bad idea. Do not.</td></tr>
+      <tr><td>minisign, sigstore, Tauri keys</td><td>Free</td><td>A different thing entirely. Those sign update files for tools and developers. Windows never looks at them.</td></tr>
+    </tbody>
+  </table>
+
+  <p>Leave signing unconfigured, or let a failed sign fall through, and Rialto pauses the
+  build right after the installer is created so you can sign it with whatever you use, then
+  carries on to the ISO when you click OK. Nothing about your existing flow breaks.</p>
+
+  <h2>When it goes wrong<span>06</span></h2>
+
+  <table>
+    <thead><tr><th style="width:17rem">What you see</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>403 Forbidden, or SignerSign() failed</td><td>Almost always the region. Your endpoint has to match the region the account and the certificate profile live in. Pick the region from Rialto's dropdown rather than typing a URL.</td></tr>
+      <tr><td>Authentication or credential errors</td><td>Run <code>az login</code> again. The sign-in does expire eventually.</td></tr>
+      <tr><td>Everything looks right, signing still refused</td><td>The <b>Artifact Signing Certificate Profile Signer</b> role, step 6. Creating the account does not grant it to you.</td></tr>
+      <tr><td>signtool.exe not found</td><td>Install the Windows SDK from <code>aka.ms/windowssdk</code>. Rialto needs the version that supports <code>/dlib</code>.</td></tr>
+      <tr><td>Something about .NET</td><td>The signing add-on needs the .NET 8 runtime. Check My Setup says which version it found.</td></tr>
+      <tr><td>Identity validation failed</td><td>Start a new request. Common causes: the billing account's legal name not matching your ID, an email address that rejects links from outside senders, or supporting documents older than twelve months.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Timing, if you sign by hand</strong>
+    Rialto signs the staged <code>menu.exe</code> <b>before</b> it compiles the installer, so with
+    automatic signing on, both the copy on the disc and the copy inside <code>setup.exe</code>
+    carry your signature. At the manual pause the installer has already been compiled, so
+    signing <code>menu\menu.exe</code> there covers the copy on the disc, not the copy the
+    installer lays down. Sign it anyway if you like: it is in the same build folder as
+    <code>setup.exe</code>.
+  </div>
+
+  <div class="note tip">
+    <strong>Bring your own account, always</strong>
+    Rialto is a tool, not a signing service. Everyone who uses it signs with their own
+    Microsoft account and their own name. Your signing identity never touches anyone else's
+    builds, and nobody else's touches yours.
+  </div>
+
+  <div class="colophon">
+    <span><strong>Rialto 1.5</strong> &middot; Built by Chandler at We the Indies&trade; &middot; wetheindies.com</span>
+    <span>Keep physical media alive.</span>
+  </div>
+</section>
+
+<script>
+// Copy button. No clipboard permission prompt for a same-origin file, and a
+// textarea fallback for file:// URLs where navigator.clipboard is unavailable.
+document.getElementById('copy').addEventListener('click', function () {
+  var text = document.getElementById('prompt').textContent;
+  var button = this;
+  function done() {
+    button.textContent = 'Copied';
+    setTimeout(function () { button.textContent = 'Copy'; }, 2000);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, fallback);
+  } else {
+    fallback();
+  }
+  function fallback() {
+    var area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* nothing to do */ }
+    document.body.removeChild(area);
+  }
+});
+</script>
+
+</body>
+</html>

@@ -1,28 +1,23 @@
 @echo off
-setlocal
+:: Rialto 1.5 debug launcher.
+:: Same as launch_rialto.bat, but keeps a console attached so errors
+:: are visible. Rialto installs its own dependencies on first run.
+cd /d "%~dp0"
 
-:: ============================================================
-::  Rialto - Game Disc Builder : debug launcher
-::  Same environment as launch_rialto.bat, but runs Rialto with
-::  a console attached so errors are visible.
-:: ============================================================
-
-echo [DEBUG] Starting Rialto in debug mode...
-
-set "RIALTO_DIR=%~dp0"
-set "RIALTO_DIR=%RIALTO_DIR:~0,-1%"
-cd /d "%RIALTO_DIR%"
-
-:: Legacy bundled environment on the dev machine (not in the repo)
-if exist "%RIALTO_DIR%\python39\" (
-    set "VENV_DIR=%RIALTO_DIR%\python39\venv"
-    set "PY_BOOTSTRAP=python"
-    if exist "%RIALTO_DIR%\python39\python.exe" set "PY_BOOTSTRAP=%RIALTO_DIR%\python39\python.exe"
-    goto :have_python
-)
-
-set "VENV_DIR=%RIALTO_DIR%\venv"
-set "PY_BOOTSTRAP=python"
+:: cmd looks in the current directory before PATH, so a python.exe dropped into
+:: the Rialto folder would win over the real one. Same guard as launch_rialto.
+if exist "%~dp0python.exe" goto :local_python
+if exist "%~dp0pythonw.exe" goto :local_python
+goto :no_local_python
+:local_python
+echo.
+echo [ERROR] There is a python.exe in the Rialto folder.
+echo   Windows would run that one instead of your installed Python.
+echo   Move or delete it, then run this file again.
+echo.
+pause
+exit /b 1
+:no_local_python
 
 :: `where python` is not enough on its own. A clean Windows 10/11 ships an
 :: App Execution Alias at %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe;
@@ -33,10 +28,9 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Python was not found on your PATH.
     echo.
-    echo   Rialto needs Python 3.9 or newer ^(64-bit^). 3.9 - 3.12 is the tested range.
-    echo   Download it from: https://www.python.org/downloads/
-    echo   Tick "Add python.exe to PATH" in the installer, then
-    echo   open a new window and run this file again.
+    echo   Install Python 3.9+ from https://www.python.org/downloads/
+    echo   and tick "Add python.exe to PATH" during setup, then open a
+    echo   new window and run this file again.
     echo.
     echo   If you just saw a message about the Microsoft Store, or about
     echo   "App execution aliases", that placeholder is all you have -
@@ -46,53 +40,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:have_python
-
-if not exist "%VENV_DIR%\Scripts\python.exe" (
-    echo [DEBUG] No virtual environment yet - creating "%VENV_DIR%"...
-    "%PY_BOOTSTRAP%" -m venv "%VENV_DIR%"
-    if errorlevel 1 (
-        echo.
-        echo [ERROR] Could not create the virtual environment.
-        echo.
-        pause
-        exit /b 1
-    )
-    if exist "%VENV_DIR%\rialto_deps_ok.txt" del /q "%VENV_DIR%\rialto_deps_ok.txt"
-)
-
-if not exist "%VENV_DIR%\Scripts\python.exe" (
-    echo.
-    echo [ERROR] "%VENV_DIR%\Scripts\python.exe" is missing.
-    echo   Delete the "venv" folder and run launch_rialto.bat again.
-    echo.
-    pause
-    exit /b 1
-)
-
-if not exist "%VENV_DIR%\rialto_deps_ok.txt" (
-    echo [DEBUG] Installing dependencies into the virtual environment...
-    "%VENV_DIR%\Scripts\python.exe" -m pip install --upgrade pip
-    "%VENV_DIR%\Scripts\python.exe" -m pip install -r "%RIALTO_DIR%\requirements.txt"
-    if errorlevel 1 (
-        echo.
-        echo [ERROR] Installing the dependencies failed.
-        echo   Check your internet connection, then try again. If a package
-        echo   refuses to build, install Python 3.12, delete "venv", and retry.
-        echo.
-        pause
-        exit /b 1
-    )
-    echo ok > "%VENV_DIR%\rialto_deps_ok.txt"
-)
-
-echo [DEBUG] Python: "%VENV_DIR%\Scripts\python.exe"
 echo [DEBUG] Running Rialto with console output...
 echo.
 
-"%VENV_DIR%\Scripts\python.exe" "%RIALTO_DIR%\Rialto.pyw"
+python "%~dp0Rialto.pyw"
 
 echo.
 echo [DEBUG] Script ended. Check for errors above.
 pause
-endlocal

@@ -1,42 +1,55 @@
 # ============================================
-# Rialto v1 - .gitignore
+# Rialto 1.5 - .gitignore
 # ============================================
 
-# ---------- Client data ----------
-input/*/
+# ---------- Your games ----------
+# Everything inside input/ is somebody's game. The folder itself stays in the
+# repo (Rialto also creates it on first run) but nothing in it is ever tracked.
+input/*
 !input/.gitkeep
 output/
 
 # ---------- Python runtime ----------
-python39/
 __pycache__/
 *.py[cod]
 *.pyo
 *.so
 *.egg-info/
 *.egg
-dist/
 build/
+dist/
 venv/
 
-# ---------- Old versions / backups ----------
-_archive/
-
-# ---------- Private business tools ----------
-_ops_console/
-rialto_ops.db
-
 # ---------- Secrets & credentials ----------
+# Your signing account details - never share these
 signing_config.json
+*.p12
+*.pfx
 
-# ---------- Session state & build artifacts ----------
+# ---------- Per-user settings, session state, build artifacts ----------
+config.json
 last_profile.json
 last_session.json
 build_log.txt
+# Records which requirements.txt the installed packages came from
+.deps_installed
 
 # ---------- Profile templates (user-specific) ----------
+# Game profiles are your own data
 templates/*.json
-!templates/_temp/
+templates/*_temp.json
+
+# ---------- Helper tools Rialto downloads for you ----------
+tools/TrustedSigning/
+tools/innoextract/
+
+# ---------- Logs and temp ----------
+*.log
+*.tmp
+
+# ---------- Harness output ----------
+# The disc menu source, re-extracted from Rialto.pyw on demand
+tools-dev/generated_menu_launcher.py
 
 # ---------- OS generated ----------
 Thumbs.db
@@ -48,12 +61,11 @@ Desktop.ini
 # ---------- IDE / editor ----------
 .vscode/
 .idea/
-.ap/
 *.swp
 *.swo
 *~
 
-# Environment files — never commit secrets
+# ---------- Environment files - never commit secrets ----------
 .env
 .env.*
 !.env.example
