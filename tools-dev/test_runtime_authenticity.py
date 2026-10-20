@@ -21,8 +21,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RIALTO = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "Rialto.pyw")
 
 sys.path.insert(0, REPO)
-import trusted_signing  # noqa: E402
-import update.fetch as fetch_module  # noqa: E402
+from rialto import trusted_signing  # noqa: E402
+from rialto.update import fetch as fetch_module  # noqa: E402
 
 failures = []
 
@@ -72,20 +72,27 @@ def extract_methods(src, class_name, names):
 
 
 def make_host(src):
-    helper = next(n for n in ast.parse(src).body
-                  if isinstance(n, ast.FunctionDef) and n.name == "iss_value")
-    reads = {n.id for n in ast.walk(helper)
-             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-    constants = [ast.get_source_segment(src, node) for node in ast.parse(src).body
-                 if isinstance(node, ast.Assign)
-                 and getattr(node.targets[0], "id", "") in reads]
+    # The module-level helpers the generator calls (iss_value, and since 1.5.1
+    # the Windows 7 shortcut helpers), with whatever constants they and it read.
+    names = {"iss_value", "iss_relative_exe", "iss_parameters", "windows7_shortcut_lines",
+             "placed_subfolder", "placed_files_lines", "placed_files_root", "compression_setting",
+             "placed_row_problem", "placed_file_refused"}
+    helpers = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name in names]
     methods = extract_methods(src, "RialtoApp", [
         "download_essential_runtimes", "_accept_microsoft_runtime",
         "generate_enhanced_installer_script",
     ])
-    ns = {"os": os, "re": __import__("re"), "shutil": shutil,
-          "urllib": urllib, "sys": sys}
-    exec("\n\n".join(constants + [ast.get_source_segment(src, helper)]), ns)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import progress_stub
+    methods += "\n\n" + progress_stub.methods(src)  # the download runs watched since 1.5.1 (B6)
+    reads = {n.id for item in helpers + [ast.parse(textwrap.dedent(methods))] for n in ast.walk(item)
+             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    constants = [ast.get_source_segment(src, node) for node in ast.parse(src).body
+                 if isinstance(node, ast.Assign)
+                 and getattr(node.targets[0], "id", "") in reads]
+    ns = dict(progress_stub.namespace(), os=os, re=__import__("re"), shutil=shutil,
+              urllib=urllib, sys=sys, json=__import__("json"))
+    exec("\n\n".join(constants + [ast.get_source_segment(src, h) for h in helpers]), ns)
     exec("class Host:\n" + textwrap.indent(methods, "    "), ns)
     host = ns["Host"]()
     host.log = []
@@ -95,7 +102,7 @@ def make_host(src):
 
 
 def fake_fetch(_url, dest, **_options):
-    """Stands in for update.fetch.fetch_to_file: no network, a small MZ stub."""
+    """Stands in for rialto.update.fetch.fetch_to_file: no network, a small MZ stub."""
     with open(dest, "wb") as f:
         f.write(b"MZ" + b"\x00" * 2048)
 

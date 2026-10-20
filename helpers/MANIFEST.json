@@ -1,0 +1,325 @@
+{
+  "about": "The tools Rialto carries inside Rialto.exe (1.5.1). tools-dev/fetch_helpers.py copies each file from its source and checks it; packaging/rialto.spec refuses to build unless helpers/ matches this exactly. Licenses and source: licenses/THIRD-PARTY.txt.",
+  "files": {
+    "cdrtools/CDDL-1.0.txt": {
+      "component": "mkisofs (cdrtools)",
+      "license": "GPL-2.0-or-later, with CDDL-1.0 parts (licenses/GPL-2.0.txt, licenses/THIRD-PARTY.txt)",
+      "sha256": "0770cbf84caf67c6e776ef1dcf89dc0cda47f8ede144f170a2850df9008739c7",
+      "size": 18557,
+      "source": "licenses/CDDL-1.0.txt",
+      "version": "3.02a10 2021/07/23, i686-pc-cygwin, from cdrtfe 1.5.9.1"
+    },
+    "cdrtools/GPL-2.0.txt": {
+      "component": "mkisofs (cdrtools)",
+      "license": "GPL-2.0-or-later, with CDDL-1.0 parts (licenses/GPL-2.0.txt, licenses/THIRD-PARTY.txt)",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "size": 18092,
+      "source": "licenses/GPL-2.0.txt",
+      "version": "3.02a10 2021/07/23, i686-pc-cygwin, from cdrtfe 1.5.9.1"
+    },
+    "cdrtools/GPL-3.0.txt": {
+      "component": "Cygwin DLL",
+      "license": "GPL-3.0-or-later (licenses/GPL-3.0.txt)",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "size": 35147,
+      "source": "licenses/GPL-3.0.txt",
+      "version": "2.3.1"
+    },
+    "cdrtools/THIRD-PARTY.txt": {
+      "component": "Rialto",
+      "license": "MIT",
+      "sha256": "18b13227705bc0f7d5f2c715803bad41363c553df912bcf1175b82a09a8fbb7f",
+      "size": 4951,
+      "source": "licenses/THIRD-PARTY.txt",
+      "version": "1.5.1"
+    },
+    "cdrtools/cygwin1.dll": {
+      "component": "Cygwin DLL",
+      "license": "GPL-3.0-or-later (licenses/GPL-3.0.txt)",
+      "sha256": "4f7a2e8c5d627cd053850a57fa266271ef6bce01d127d89c222ec3d8db159a47",
+      "size": 3458775,
+      "source": "C:/cdrtools/cygwin1.dll",
+      "version": "2.3.1"
+    },
+    "cdrtools/mkisofs.exe": {
+      "component": "mkisofs (cdrtools)",
+      "license": "GPL-2.0-or-later, with CDDL-1.0 parts (licenses/GPL-2.0.txt, licenses/THIRD-PARTY.txt)",
+      "sha256": "37a08b550c056e321d8841e67e67c07cb0bf826bd2f7b5e0bd87c99137c993e0",
+      "size": 1356800,
+      "source": "C:/cdrtools/mkisofs.exe",
+      "version": "3.02a10 2021/07/23, i686-pc-cygwin, from cdrtfe 1.5.9.1"
+    },
+    "inno/Default.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "6b540d65b8cec7a74ba7959ea30db30da7076a25b3a5e4176f53c6985f89f2b0",
+      "size": 22021,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Default.isl",
+      "version": "6.5.4"
+    },
+    "inno/ISCC.exe": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "876b87e1f4261448bb682e597f5e62201594dd4b43e6779bc91fc1687f74d840",
+      "size": 1454736,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISCC.exe",
+      "version": "6.5.4"
+    },
+    "inno/ISCmplr.dll": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "560e88cad3e2bbc3a5d1cb99947cd49f7d1e5f756d7007d5e332f3471b656d3c",
+      "size": 1472144,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll",
+      "version": "6.5.4"
+    },
+    "inno/ISCmplr.dll.issig": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "2be7d8b110dbee961d0ac0c96b8cb624b3748775a08023cbc78e244fdaa04702",
+      "size": 367,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll.issig",
+      "version": "6.5.4"
+    },
+    "inno/ISPP.dll": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "796a0931cadde727e4cabb284de33cf712f7e0e13bcca89239b7ca8d0bac29b2",
+      "size": 1002128,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISPP.dll",
+      "version": "6.5.4"
+    },
+    "inno/ISPP.dll.issig": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "187d881b9cbad29c0612bf11bbb26e167ac088761554d23b2e247c00f2fe6e20",
+      "size": 364,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISPP.dll.issig",
+      "version": "6.5.4"
+    },
+    "inno/ISPPBuiltins.iss": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "f0465c1d780a30c27819dca21dbd63a6defd629d846da64ade803ef40f056d26",
+      "size": 10492,
+      "source": "C:/Program Files (x86)/Inno Setup 6/ISPPBuiltins.iss",
+      "version": "6.5.4"
+    },
+    "inno/Languages/BrazilianPortuguese.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "88ccc5ca17fb3125299aee559c40abb5c44750e1d66cf90dd82753bf32e5f192",
+      "size": 23928,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/BrazilianPortuguese.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Catalan.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "086a53ee6272b194d8aa87aeddac17b7c3bad26929777760e1b00b32e1f9a16b",
+      "size": 23302,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Catalan.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Czech.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "c3054bce85feb47ad22e42aae1715d2cebfdb34564f60427f92865dbbcf520d0",
+      "size": 25141,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Czech.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Danish.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "dea0722b8abf1c67e555719785bbf65e9c40a1c163d003a02e1369e974ef11c2",
+      "size": 22569,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Danish.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Dutch.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "d518e99e4e37666ccf3948b6384cebc39a70e446144124bbd0589c24ee0c06f0",
+      "size": 22332,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Dutch.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Finnish.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "b30091443cc649dce095470765490fb5791fedf015d96a190e53236b874f9dfd",
+      "size": 21576,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Finnish.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/French.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "5dc9f115241103556dbd106c6c9cd6aa23773c7596b744166244fa21ea1f2df9",
+      "size": 27069,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/French.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/German.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "3e6a066e7af1a76390b62d697584d2ee13c8e2302a90aa2594898eaad0da826c",
+      "size": 25823,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/German.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Hebrew.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "bbf39fb66d118c437be6532aa8f4652b533fc9a92261077a25c3a08ce056f7d6",
+      "size": 26143,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Hebrew.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Italian.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "e0a4786b1ae40bd48a2b0ccae534b938617ec765f0df3f761f425c9c61f13ee6",
+      "size": 24054,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Italian.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Japanese.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "d5450537bb128112347bf86a4bdc3a4be0605414df0bc4fc90f55aaef1ba369b",
+      "size": 28186,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Japanese.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Norwegian.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "19119d601d4c40c0b42a2a99c932d5fc65521c67a01d3803780af2620cdfd5ff",
+      "size": 22259,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Norwegian.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Polish.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "593f14b249afb49d38976816a4a3c73e13e354d1698f9f98d584c1c6c6a18e48",
+      "size": 24461,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Polish.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Portuguese.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "9dcd690414edaa35fe4dc66aab09d54e6957c53fc74df873fa0b7b53382ca9c8",
+      "size": 23610,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Portuguese.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Russian.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "2f8de96d83b1d37d61e589e14e5ec86f9192ee4438dd820b1998a0d4e02c7152",
+      "size": 33618,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Russian.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Slovak.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "268b523811052d151a5a50df400df4fdd20eacf87f41500e3639693d6e429bd0",
+      "size": 25829,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Slovak.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Slovenian.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "c50817284822262070f79006659e5bd6991417477b193ce3f2f44d9a32e131be",
+      "size": 21793,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Slovenian.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Spanish.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "8065ccb2fffe17be6ddee1be1d13251106711d8d7795cfd05a723701e563837d",
+      "size": 24357,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Spanish.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Turkish.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "92938171cf906770dac1f0a174f45cac5e217e625bc24f3d1fb294dc276ac205",
+      "size": 24231,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Turkish.isl",
+      "version": "6.5.4"
+    },
+    "inno/Languages/Ukrainian.isl": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "22ac52f287828d8bbf538450667a691a3f88e21306af3667a2b3c8959e9e7e4a",
+      "size": 33342,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Languages/Ukrainian.isl",
+      "version": "6.5.4"
+    },
+    "inno/Setup.e32": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "b43034e2913bb65e00c6be9d0283f246c5eb35af4160960e4ed9990366fc1dba",
+      "size": 3778048,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Setup.e32",
+      "version": "6.5.4"
+    },
+    "inno/Setup.e32.issig": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "655135bcb809e17a11264c59ea579f8e09de4fd322bc8fac56db2658d3cf43b3",
+      "size": 365,
+      "source": "C:/Program Files (x86)/Inno Setup 6/Setup.e32.issig",
+      "version": "6.5.4"
+    },
+    "inno/SetupLdr.e32": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "4695dbf31f95e9a75e885123a822eb835e04a7277f7e89c220cb82dfb98897bf",
+      "size": 882176,
+      "source": "C:/Program Files (x86)/Inno Setup 6/SetupLdr.e32",
+      "version": "6.5.4"
+    },
+    "inno/SetupLdr.e32.issig": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "4057fa5016ed84d19a784f9d01ed41ea94eb13f55421637a86d458041b663e92",
+      "size": 367,
+      "source": "C:/Program Files (x86)/Inno Setup 6/SetupLdr.e32.issig",
+      "version": "6.5.4"
+    },
+    "inno/islzma.dll": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "8af307ce3738ab1d37cc7e76b2f76615e2045597d4367c3e40d52b5f2fbd353d",
+      "size": 139408,
+      "source": "C:/Program Files (x86)/Inno Setup 6/islzma.dll",
+      "version": "6.5.4"
+    },
+    "inno/islzma.dll.issig": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "c49d4b2cc6499846118dc376c9c66081744531edc932ffa979698d68ec0662b2",
+      "size": 365,
+      "source": "C:/Program Files (x86)/Inno Setup 6/islzma.dll.issig",
+      "version": "6.5.4"
+    },
+    "inno/license.txt": {
+      "component": "Inno Setup",
+      "license": "Inno Setup License (licenses/InnoSetup-license.txt)",
+      "sha256": "a7f97b166be34fc8bf04e79617b9f56b2aa7903a2808f94155e449c80bdfdcc2",
+      "size": 1521,
+      "source": "C:/Program Files (x86)/Inno Setup 6/license.txt",
+      "version": "6.5.4"
+    }
+  }
+}

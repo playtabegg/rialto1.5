@@ -8,7 +8,7 @@
 #
 # --require-hashes is deliberately not used here. That mode needs a hash for
 # every transitive wheel, and those wheels differ by Python minor version
-# (3.9 vs 3.12 vs 3.14) and platform. A single hash-pinned file would break
+# (3.9 vs 3.12) and platform. A single hash-pinned file would break
 # the 3.9-3.12 first-run bootstrap.
 
 # Image processing

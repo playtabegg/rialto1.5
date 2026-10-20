@@ -14,12 +14,12 @@ REPO = sys.argv[1] if len(sys.argv) > 1 else \
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from update._ed25519 import BASE, Q, encode_point, point_mul  # noqa: E402
-from update.check import check_for_update  # noqa: E402
-from update.feed import FeedProblem, fetch_bytes, parse_feed  # noqa: E402
-from update.fetch import FetchProblem, fetch_to_file  # noqa: E402
-from update.minisig import parse_public_key  # noqa: E402
-from update.keys import ENDPOINTS, trusted_keys
+from rialto.update._ed25519 import BASE, Q, encode_point, point_mul  # noqa: E402
+from rialto.update.check import check_for_update  # noqa: E402
+from rialto.update.feed import FeedProblem, fetch_bytes, parse_feed  # noqa: E402
+from rialto.update.fetch import FetchProblem, fetch_to_file  # noqa: E402
+from rialto.update.minisig import parse_public_key  # noqa: E402
+from rialto.update.keys import ENDPOINTS, trusted_keys
 
 failures = []
 
@@ -108,7 +108,7 @@ def never(url, cap):
     raise AssertionError("fetched without a key")
 out = check_for_update("1.5.0", pubs=[], fetch=never)
 check(out.sentence.startswith("This build carries no release key"), "no-key sentence wrong: " + out.sentence)
-# update/keys.py ships the release key (id F8E608F4766B35A6) in slot one and
+# rialto/update/keys.py ships the release key (id F8E608F4766B35A6) in slot one and
 # a spare (id AE1D6657A32C4E9A) in slot two, so a default check contacts the
 # first endpoint.
 asked = []
@@ -153,6 +153,57 @@ def flaky(url, cap):
     return sig.encode() if url.endswith(".minisig") else raw
 out = check_for_update("1.5.0", endpoints=("https://github.com/x/latest.json", "https://updates.wetheindies.com/y/latest.json"), pubs=pubs, fetch=flaky)
 check(out.newer and out.release.endpoint.startswith("https://updates.wetheindies.com"), "the second endpoint was not used")
+
+# A server that answered 404 was reached (1.5.1, end-to-end runs): the person is told no feed is
+# published yet, not that the server could not be reached, even when the other endpoint is not in DNS.
+import urllib.error
+import urllib.request
+from rialto.update.feed import FeedNotPublished, NOT_PUBLISHED  # noqa: E402
+
+real_urlopen_404 = urllib.request.urlopen
+
+
+def answers_404(request, timeout=None):
+    raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+
+def no_dns(request, timeout=None):
+    raise urllib.error.URLError(OSError(11001, "getaddrinfo failed"))
+
+
+urllib.request.urlopen = answers_404
+try:
+    try:
+        fetch_bytes("https://github.com/x/latest.json", 10)
+        check(False, "a 404 was read as a feed")
+    except FeedNotPublished as problem:
+        check(str(problem) == NOT_PUBLISHED, "404 sentence wrong: " + str(problem))
+    out = check_for_update("1.5.0", endpoints=("https://github.com/x/latest.json",), pubs=pubs)
+    check(out.sentence == NOT_PUBLISHED and out.look_yourself and not out.newer,
+          "a 404 did not say no feed is published: " + out.sentence)
+    check("Could not reach" not in out.sentence, "a 404 still says could not reach")
+
+    def github_404_then_no_dns(request, timeout=None):
+        if "github.com" in request.full_url:
+            return answers_404(request, timeout)
+        return no_dns(request, timeout)
+    urllib.request.urlopen = github_404_then_no_dns
+    out = check_for_update("1.5.0", endpoints=("https://github.com/x/latest.json",
+                                               "https://updates.wetheindies.com/y/latest.json"), pubs=pubs)
+    check(out.sentence == NOT_PUBLISHED, "404 then a DNS failure said: " + out.sentence)
+    urllib.request.urlopen = no_dns
+    out = check_for_update("1.5.0", endpoints=("https://github.com/x/latest.json",
+                                               "https://updates.wetheindies.com/y/latest.json"), pubs=pubs)
+    check(out.sentence == "Could not reach the release server." and not out.look_yourself,
+          "a real network failure no longer says could not reach: " + out.sentence)
+
+    def answers_500(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 503, "Unavailable", {}, None)
+    urllib.request.urlopen = answers_500
+    out = check_for_update("1.5.0", endpoints=("https://github.com/x/latest.json",), pubs=pubs)
+    check("HTTP 503" in out.sentence and "Could not reach" not in out.sentence, "a 503 said: " + out.sentence)
+finally:
+    urllib.request.urlopen = real_urlopen_404
 
 # the real fetcher refuses strangers without a socket
 try:
@@ -223,6 +274,22 @@ with tempfile.TemporaryDirectory() as folder:
         check(not os.listdir(folder), "a wrong-hash download left a file behind")
     finally:
         urllib.request.urlopen = real_urlopen
+
+# --- the one-click download (1.5.1): only a readable https page on github.com goes to the browser ---
+from rialto.update.feed import browser_url  # noqa: E402
+
+for url, want in [
+        ("https://github.com/playtabegg/rialto1.5/releases/download/v1.5.2/Rialto-1.5.2-Disc-Maker.zip", True),
+        ("https://github.com/playtabegg/rialto1.5/releases/tag/v1.5.2", True),
+        ("https://objects.githubusercontent.com/x/Rialto-1.5.2-Disc-Maker.zip", False),
+        ("https://release-assets.githubusercontent.com/x.zip", False),
+        ("http://github.com/playtabegg/rialto1.5/releases/latest", False),
+        ("https://github.com.evil.example/x.zip", False),
+        ("https://wetheindies.com/x.zip", False),
+        ("javascript:alert(1)", False),
+        ("", False),
+        (None, False)]:
+    check(bool(browser_url(url)) == want, "browser_url(%r) should be %s" % (url, "kept" if want else "refused"))
 
 if failures:
     for item in failures:

@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-import trusted_signing  # noqa: E402
+from rialto import trusted_signing  # noqa: E402
 
 failures = []
 
@@ -70,7 +70,7 @@ def main():
              repr([w.encode("ascii", "replace").decode() for w in warnings]))
         says("ensure_dlib source uses safe_extract_all",
              "safe_extract_all" in open(
-                 os.path.join(REPO, "trusted_signing.py"), encoding="utf-8").read())
+                 os.path.join(REPO, "rialto", "trusted_signing.py"), encoding="utf-8").read())
         says("Rialto innoextract path uses safe_extract_all",
              "safe_extract_all" in open(
                  os.path.join(REPO, "Rialto.pyw"), encoding="utf-8").read())

@@ -1,11 +1,11 @@
 """What a check trusts: the release keys and where the feed lives.
 
-Two keys are trusted: the release key and its cold spare. Only the public
+Two keys are trusted: the release key and its spare. Only the public
 halves are here; the private halves never enter a repository. A build
 that carries no key ends every check in "this build carries no release
 key" and offers nothing.
 
-Two slots, so a cold spare is trusted before it is ever used.
+Two slots, so a spare is trusted before it is ever used.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ APP = "rialto"
 CHANNEL = "stable"
 
 #: minisign public key lines (base64 of ``Ed`` + key id + key), one per
-#: slot: the release key first, its cold spare second.
+#: slot: the release key first, its spare second.
 TRUSTED_PUBLIC_KEYS: tuple = (
     # wti-app-release, key id F8E608F4766B35A6, generated 29 Aug 2026.
     # This is the public half; the private half never enters a
@@ -44,6 +44,11 @@ ALLOWED_HOSTS = frozenset(
 )
 
 RELEASE_PAGE = "https://github.com/playtabegg/rialto1.5/releases/latest"
+
+# Where Check for a New Rialto may send the person's web browser: the release's own download, on
+# a page a person can read. A narrower set than ALLOWED_HOSTS, which also names GitHub's raw file
+# servers that only the feed fetch needs.
+BROWSER_HOSTS = frozenset({"github.com", "updates.wetheindies.com"})
 
 
 def trusted_keys(lines=TRUSTED_PUBLIC_KEYS):

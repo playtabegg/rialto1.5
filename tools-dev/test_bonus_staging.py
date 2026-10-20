@@ -68,7 +68,7 @@ def extract_methods(src, class_name, names):
 
 
 def make_host(method_src, extra_globals=None, **attrs):
-    ns = {"os": os, "sys": sys, "shutil": shutil, "glob": __import__("glob")}
+    ns = {"os": os, "sys": sys, "shutil": shutil, "glob": __import__("glob"), "time": time}
     ns.update(extra_globals or {})
     exec(f"class Host:\n{textwrap.indent(method_src, '    ')}", ns)
     host = ns["Host"]()
@@ -146,7 +146,7 @@ def class_constant(src, class_name, name):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
             for sub in node.body:
                 if isinstance(sub, ast.Assign) and getattr(sub.targets[0], "id", "") == name:
-                    return ast.literal_eval(sub.value)
+                    return eval(compile(ast.Expression(sub.value), "<constant>", "eval"), {})
     raise SystemExit(f"class constant {class_name}.{name!r} not found")
 
 
@@ -250,6 +250,9 @@ def run_pipeline(base, src, mod_launcher=True, with_bonus=True, with_mods=True):
         "_collect_disc_fileset",
         "default_mod_dir", "resolved_mod_dir", "staged_mod_dir_name",
     ])
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import progress_stub
+    methods += "\n\n" + progress_stub.methods(src)  # the copy is counted since 1.5.1 (B6)
     host = make_host(methods, mod_launcher_var=Flag(mod_launcher),
                      mod_folder_var=Flag(""), current_game_path=game_path)
 
@@ -321,7 +324,7 @@ def extract_module_funcs(src, names):
 
 
 def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
-                prebuilt=False):
+                prebuilt=False, games=None, extra_files=()):
     """Run the real preview_disc_menu with everything visual stubbed out.
 
     Returns (preview_root, status_log, popen_calls). No window is ever opened:
@@ -334,6 +337,10 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
     folder, so the lookup order is exercised rather than mocked.
     """
     game_path = make_input_tree(base, with_bonus, with_mods)
+    for rel in extra_files:
+        p = os.path.join(game_path, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write("x" * 10)
     popen_calls = []
 
     class FakePopen:
@@ -374,7 +381,7 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
                                "default_bonus_dir", "resolved_bonus_dir",
                                "default_mod_dir", "resolved_mod_dir",
                                "staged_mod_dir_name",
-                               "detect_primary_game_exe"])
+                               "detect_primary_game_exe", "stage_preview_games"])
     host = make_host(
         methods,
         extra_globals={
@@ -413,11 +420,14 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
         # exercised instead of shadowed.
         HELPER_EXE_NAMES=class_constant(src, "RialtoApp", "HELPER_EXE_NAMES"),
         NON_GAME_DIRS=class_constant(src, "RialtoApp", "NON_GAME_DIRS"),
+        PREVIEW_EXE_COPY_LIMIT=64 * 1024 * 1024,
+        MENU_PICTURE_TYPES=class_constant(src, "RialtoApp", "MENU_PICTURE_TYPES"),
+        MENU_PICTURE_LIMIT=class_constant(src, "RialtoApp", "MENU_PICTURE_LIMIT"),
     )
     log = []
     host.update_status = log.append
     host.show_centered_popup = lambda *a, **k: log.append(f"POPUP {a}")
-    host.validated_game_executables = lambda: []
+    host.validated_game_executables = lambda: list(games or [])
 
     seen = {}
 
@@ -508,7 +518,10 @@ def main():
         game_path = make_input_tree(root)
         output_path = os.path.join(root, "output", "MockGame")
         os.makedirs(output_path)
-        host = make_host(extract_methods(src, "RialtoApp", ["copy_game_files_to_output"]),
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import progress_stub
+        host = make_host(extract_methods(src, "RialtoApp", ["copy_game_files_to_output"])
+                         + "\n\n" + progress_stub.methods(src),
                          mod_launcher_var=Flag(False))
         host.copy_game_files_to_output(game_path, output_path)
         payload = inno_sweep(output_path, excludes)
@@ -612,6 +625,50 @@ def main():
         check("bonus/ and mods/ staged as before",
               (os.path.isdir(os.path.join(preview_root, "bonus")),
                os.path.isdir(os.path.join(preview_root, "mods"))), (True, True))
+        shutil.rmtree(preview_root, ignore_errors=True)
+        print()
+
+        # --- scenario G2: Preview of a disc of several games ---------------
+        # PLAY opens the Choose Your Game page in a preview, and each game's
+        # picture is looked for inside the preview root (the author's image,
+        # else the exe's icon). The menu refuses a path out through a junction,
+        # so the pictures and exes must be real files there (1.5.1).
+        root = os.path.join(base, "G2")
+        os.makedirs(root)
+        several = [{"name": "Alpha", "exe": "Alpha/Alpha.exe", "icon": "Alpha/cover.png"},
+                   {"name": "Beta", "exe": "Beta/Beta.exe"}]
+        preview_root, log, popen_calls, cleanup = run_preview(
+            root, src, prebuilt=True, games=several,
+            extra_files=("Alpha/Alpha.exe", "Alpha/cover.png", "Beta/Beta.exe"))
+        print("Scenario G2 - Preview Disc Menu on a disc of several games")
+        cfg = json.load(open(os.path.join(preview_root, "menu", "menu_config.json"), encoding="utf-8"))
+        check("the preview's config lists both games", [g["name"] for g in cfg.get("games", [])], ["Alpha", "Beta"])
+        for rel in ("Alpha/cover.png", "Beta/Beta.exe"):
+            path = os.path.join(preview_root, *rel.split("/"))
+            check("%s staged as a real file in the preview root" % rel,
+                  os.path.isfile(path) and not os.path.islink(path)
+                  and os.path.realpath(path).startswith(os.path.realpath(preview_root)), True)
+        check("Alpha's exe is not staged: its own picture is shown instead",
+              os.path.exists(os.path.join(preview_root, "Alpha", "Alpha.exe")), False)
+        said = [line for line in log if line.startswith("✅ Preview launched")]
+        check("the log says where to look, not that Play is off",
+              said == ["✅ Preview launched. Click PLAY GAMES to see the Choose Your Game page; "
+                       "starting a game and UNINSTALL are switched off in a preview"], True)
+        shutil.rmtree(preview_root, ignore_errors=True)
+        check("the author's files are still there after the preview is removed",
+              all(os.path.isfile(os.path.join(root, "input", "MockGame", *rel.split("/")))
+                  for rel in ("Alpha/cover.png", "Beta/Beta.exe")), True)
+
+        root = os.path.join(base, "G3")
+        os.makedirs(root)
+        preview_root, log, popen_calls, cleanup = run_preview(
+            root, src, prebuilt=True, games=[{"name": "Alpha", "exe": "Alpha/Alpha.exe"}],
+            extra_files=("Alpha/Alpha.exe",))
+        print("Scenario G3 - a single game's Preview is as it was")
+        check("nothing extra staged", sorted(os.listdir(preview_root)), ["bonus", "menu", "mods"])
+        check("the log line is unchanged",
+              [line for line in log if line.startswith("✅ Preview launched")]
+              == ["✅ Preview launched - PLAY/UNINSTALL are disabled in preview mode"], True)
         shutil.rmtree(preview_root, ignore_errors=True)
         print()
 

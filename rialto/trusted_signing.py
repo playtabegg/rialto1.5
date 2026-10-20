@@ -45,11 +45,13 @@ def _base_dir():
     signing details would vanish between runs and the ~20 MB dlib would be
     re-downloaded every single build.
 
-    Source: the folder holding this module, unchanged.
+    Source: the folder holding Rialto.pyw, one up from this package (rialto/),
+    which is where 1.5.0 kept them when this module sat beside Rialto.pyw. An
+    existing signing_config.json and dlib cache are found where they were.
     """
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 BASE_DIR = _base_dir()
@@ -228,6 +230,24 @@ def signed_by_microsoft(path):
     return "microsoft corporation" in output
 
 
+
+def has_valid_signature(path):
+    """True / False / None: does `path` carry a valid Authenticode signature?
+
+    For the pressed disc's master sheet, which says whether setup.exe and
+    menu.exe are signed. None means signtool was not found, never a no.
+    """
+    signtool = find_signtool()
+    if not signtool or not os.path.isfile(path):
+        return None
+    try:
+        result = subprocess.run([signtool, "verify", "/pa", path],
+                                capture_output=True, text=True, timeout=120,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return None
+    return result.returncode == 0
+
 def safe_extract_all(zipf, dest, status=None):
     """Extract a zip, refusing members that would land outside `dest`.
 
@@ -303,7 +323,7 @@ def ensure_dlib(status=print):
 
     # One pinned downloader for everything Rialto fetches and then runs:
     # https only, nuget.org and its CDN only, a size cap, no partial file.
-    from update.fetch import FetchProblem, fetch_to_file
+    from .update.fetch import FetchProblem, fetch_to_file
     last_error = None
     for url in NUGET_PACKAGE_URLS:
         try:
@@ -600,7 +620,7 @@ def sign_file(file_path, status=print):
             # way to exit 0 without leaving a signature Windows will accept,
             # a timestamp server that quietly failed being the usual one.
             try:
-                import ssl_signing
+                from . import ssl_signing
                 verified = ssl_signing.is_signed(file_path)
             except Exception:
                 verified = None

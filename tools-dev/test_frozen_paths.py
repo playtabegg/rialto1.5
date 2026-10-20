@@ -2,14 +2,15 @@
 
 Three things are proved here without launching the GUI or PyInstaller:
 
-  1. trusted_signing.BASE_DIR is byte-identical in source mode to the old
-     `os.path.dirname(os.path.abspath(__file__))`, and lands next to the exe
-     when sys.frozen is set. The module is imported for real (source mode) and
-     the frozen branch is re-executed from its own extracted source.
+  1. trusted_signing.BASE_DIR in source mode is the folder holding Rialto.pyw,
+     one up from the rialto package - where 1.5.0 kept signing_config.json when
+     the module sat beside Rialto.pyw - and lands next to the exe when
+     sys.frozen is set. The module is imported for real (source mode) and the
+     frozen branch is re-executed from its own extracted source.
   2. Rialto.pyw's app_root()/constants are evaluated the same way, and no path
      constant is left resolving against the current directory.
-  3. rialto.spec carries a real VSVersionInfo, upx=False, README.md in datas,
-     and no templates/ entry.
+  3. packaging/rialto.spec carries a real VSVersionInfo, upx=False, README.md
+     in datas, and no templates/ entry, and builds from the folder above it.
 
 Usage: python test_frozen_paths.py [path-to-rialto1.5]
 """
@@ -21,8 +22,8 @@ import textwrap
 REPO = sys.argv[1] if len(sys.argv) > 1 else \
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RIALTO = os.path.join(REPO, "Rialto.pyw")
-SPEC = os.path.join(REPO, "rialto.spec")
-TRUSTED = os.path.join(REPO, "trusted_signing.py")
+SPEC = os.path.join(REPO, "packaging", "rialto.spec")
+TRUSTED = os.path.join(REPO, "rialto", "trusted_signing.py")
 
 failures = []
 
@@ -76,13 +77,17 @@ def call_under(func_src, name, module_file, frozen, exe_path):
 # --------------------------------------------------------------------------
 print("trusted_signing.BASE_DIR")
 sys.path.insert(0, REPO)
-import trusted_signing  # noqa: E402
+from rialto import trusted_signing  # noqa: E402
 
-legacy = os.path.dirname(os.path.abspath(trusted_signing.__file__))
-check("source mode identical to the old expression", trusted_signing.BASE_DIR, legacy)
-check("CONFIG_FILE beside the module", trusted_signing.CONFIG_FILE,
+# 1.5.0 kept trusted_signing.py beside Rialto.pyw and its files beside the module. The module now
+# lives in rialto/, and its files stay where they were: the folder holding Rialto.pyw.
+legacy = os.path.dirname(os.path.abspath(RIALTO))
+check("the module is the one in rialto/", os.path.normcase(os.path.abspath(trusted_signing.__file__)),
+      os.path.normcase(os.path.abspath(TRUSTED)))
+check("source mode is the folder holding Rialto.pyw, as in 1.5.0", trusted_signing.BASE_DIR, legacy)
+check("CONFIG_FILE beside Rialto.pyw", trusted_signing.CONFIG_FILE,
       os.path.join(legacy, "signing_config.json"))
-check("dlib cache beside the module", trusted_signing.DLIB_CACHE_DIR,
+check("dlib cache beside Rialto.pyw", trusted_signing.DLIB_CACHE_DIR,
       os.path.join(legacy, "tools", "TrustedSigning"))
 
 tsrc = open(TRUSTED, encoding="utf-8").read()
@@ -197,7 +202,8 @@ ok("log_build_event anchors build_log.txt to APP_ROOT",
 doc_src = extract_func(rsrc, "doc_path")
 ok("doc_path checks sys._MEIPASS", "_MEIPASS" in doc_src)
 ok("doc_path checks beside the exe (APP_ROOT)", "APP_ROOT" in doc_src)
-ok("doc_path copies a bundled page out of the temp folder", "shutil.copy2" in doc_src)
+# Copying the bundled page out, never through a link at that name, is driven for real in
+# test_preview_and_docs.py.
 
 # A frozen Rialto has no checkout behind it and no public copy of the guides to
 # fall back on - a link to one would be a 404, which is worse than no button.
@@ -219,7 +225,7 @@ ok("open_doc asks before opening", "confirm_open_offline_page" in opener_src)
 print()
 
 # --------------------------------------------------------------------------
-print("rialto.spec")
+print("packaging/rialto.spec")
 ssrc = open(SPEC, encoding="utf-8").read()
 stree = ast.parse(ssrc)
 ok("spec compiles", bool(compile(stree, SPEC, "exec")))
@@ -259,28 +265,70 @@ ok("LegalCopyright set", bool(strings.get("LegalCopyright")), strings.get("Legal
 
 # VERSION is no longer a literal: the spec reads `__version__` out of
 # Rialto.pyw (tools-dev/test_version_agreement.py pins the three together), so
-# this evaluates that one assignment the way the spec does, with SPECPATH set.
+# this evaluates that one assignment the way the spec does, with SPECPATH set
+# to packaging/ as PyInstaller sets it.
 version_tuple = None
 for node in stree.body:
     if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "VERSION":
         try:
             version_tuple = ast.literal_eval(node.value)
         except ValueError:
-            scope = {"SPECPATH": REPO, "os": os, "__name__": "spec_version_probe"}
+            scope = {"SPECPATH": os.path.dirname(SPEC), "os": os, "__name__": "spec_version_probe"}
             preamble = [n for n in stree.body[:stree.body.index(node) + 1]
-                        if isinstance(n, (ast.Import, ast.ImportFrom, ast.With, ast.If, ast.Assign))
+                        if isinstance(n, (ast.Import, ast.ImportFrom, ast.With, ast.If, ast.Assign, ast.FunctionDef))
                         and not (isinstance(n, ast.ImportFrom) and n.module and "PyInstaller" in n.module)]
             exec(compile(ast.Module(body=preamble, type_ignores=[]), SPEC, "exec"), scope)
             version_tuple = scope.get("VERSION")
-check("version tuple is 1.5.0.0", version_tuple, (1, 5, 0, 0))
+_ver = __import__("re").search(r'^__version__ = "([0-9.]+)"', open(os.path.join(REPO, "Rialto.pyw"), encoding="utf-8").read(), __import__("re").M)
+_want = tuple(int(x) for x in _ver.group(1).split(".")) + (0,) * (4 - len(_ver.group(1).split(".")))
+check("version tuple is __version__ (%s)" % _ver.group(1), version_tuple, _want)
+
+# The spec lives in packaging/ and names every source through _src(), from ROOT, the folder above it.
+# Each datas source is evaluated that way and read back as a repo-relative name.
+spec_scope = {"SPECPATH": os.path.dirname(SPEC), "os": os, "__name__": "spec_paths_probe"}
+for node in stree.body:
+    if (isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "ROOT") \
+            or (isinstance(node, ast.FunctionDef) and node.name == "_src"):
+        exec(compile(ast.Module(body=[node], type_ignores=[]), SPEC, "exec"), spec_scope)
+ok("ROOT is the folder above packaging/, where Rialto.pyw is",
+   os.path.normcase(spec_scope.get("ROOT", "")) == os.path.normcase(os.path.abspath(REPO)), spec_scope.get("ROOT"))
+
+
+def repo_relative(path):
+    return os.path.relpath(path, REPO).replace(os.sep, "/") if os.path.isabs(path) else path
+
 
 datas = None
+analysis = None
 for node in ast.walk(stree):
     if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Analysis":
+        analysis = node
         for kw in node.keywords:
             if kw.arg == "datas":
-                datas = [ast.literal_eval(e) for e in kw.value.elts]
+                datas = [(repo_relative(src), dest) for src, dest in
+                         (eval(compile(ast.Expression(e), SPEC, "eval"), dict(spec_scope)) for e in kw.value.elts)]
 ok("datas present", datas is not None, str(datas))
+entry = [repo_relative(eval(compile(ast.Expression(e), SPEC, "eval"), dict(spec_scope)))
+         for e in (analysis.args[0].elts if analysis is not None and analysis.args else [])]
+check("the entry script is Rialto.pyw at the top", entry, ["Rialto.pyw"])
+icon = kwargs.get("icon")
+check("the icon is assets/bird_icon.ico at the top",
+      repo_relative(eval(compile(ast.Expression(icon), SPEC, "eval"), dict(spec_scope))) if icon is not None else None,
+      "assets/bird_icon.ico")
+hidden = []
+for kw in (analysis.keywords if analysis is not None else []):
+    if kw.arg == "hiddenimports":
+        hidden = ast.literal_eval(kw.value)
+modules = set()
+for folder, _dirs, files in os.walk(os.path.join(REPO, "rialto")):
+    if "__pycache__" in folder:
+        continue
+    for name in files:
+        if name.endswith(".py"):
+            dotted = os.path.relpath(os.path.join(folder, name[:-3]), REPO).replace(os.sep, ".")
+            modules.add(dotted[:-len(".__init__")] if dotted.endswith(".__init__") else dotted)
+modules = sorted(modules)
+check("hiddenimports name every module in rialto/", sorted(hidden), modules)
 sources = [d[0] for d in (datas or [])]
 ok("the HTML manual is bundled under docs/",
    ("docs/rialto-guide.html", "docs") in (datas or []))
@@ -290,7 +338,20 @@ ok("README.md bundled at the bundle root", ("README.md", ".") in (datas or []))
 ok("SIGNING.md bundled at the bundle root", ("SIGNING.md", ".") in (datas or []))
 ok("assets kept", any(s.startswith("assets/") for s in sources))
 ok("templates dropped", not any("templates" in s for s in sources))
+# The tools Rialto carries (1.5.1): bundled under helpers/, never "tools" (package_release forbids that name),
+# with licenses/ beside them, and the spec refuses to build unless helpers/ matches its pins.
+ok("the carried Inno Setup is bundled under helpers/inno", ("helpers/inno", "helpers/inno") in (datas or []))
+ok("the carried mkisofs is bundled under helpers/cdrtools", ("helpers/cdrtools", "helpers/cdrtools") in (datas or []))
+ok("the license texts are bundled under licenses/", ("licenses", "licenses") in (datas or []))
+ok("nothing bundled under a folder named tools", not any(d.split("/")[0] == "tools" for _s, d in (datas or [])))
+ok("the spec refuses to build when helpers/ does not match its pins",
+   "from fetch_helpers import problems" in ssrc and '_helper_problems(_src("helpers"))' in ssrc
+   and "raise SystemExit(" in ssrc[ssrc.index("_HELPER_PROBLEMS"):])
 for src_name, _dest in datas or []:
+    if src_name.startswith("helpers/") and not os.path.isdir(os.path.join(REPO, "helpers", "inno")):
+        # Out of git (tools-dev/fetch_helpers.py puts them there); the spec refuses without them.
+        print(f"  [--  ] datas source not fetched in this checkout: {src_name}")
+        continue
     ok(f"datas source exists: {src_name}",
        os.path.exists(os.path.join(REPO, src_name.replace("/", os.sep))))
 print()

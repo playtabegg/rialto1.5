@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +31,14 @@ Fetch = Callable[[str, int], bytes]
 
 class FeedProblem(Exception):
     """The feed could not be trusted or read. ``str(problem)`` is the sentence."""
+
+
+#: Said when the release server answered but has no feed at that address (HTTP 404): it was reached.
+NOT_PUBLISHED = "No release feed is published yet, so Rialto cannot tell whether a newer one exists."
+
+
+class FeedNotPublished(FeedProblem):
+    """The release server answered, and there is no feed there yet (HTTP 404). Not an outage."""
 
 
 @dataclass(frozen=True)
@@ -59,6 +68,26 @@ def host_allowed(url: str, allowed: frozenset[str] = trust.ALLOWED_HOSTS) -> boo
     return parsed.scheme == "https" and (parsed.hostname or "") in allowed
 
 
+def browser_url(url: str) -> str:
+    """``url`` if Rialto may open it in the person's web browser, else "".
+
+    Only an address out of a verified feed comes here, and only an https one on
+    BROWSER_HOSTS goes on: the release's download or its notes page. A browser
+    reads some addresses differently from urlparse ("https://evil.example\\@github.com/"
+    is evil.example to a browser), so anything with a backslash, a space, a
+    control character, a user name or a port is refused outright.
+    """
+    if not isinstance(url, str) or "\\" in url or "@" in url or any(c <= " " or c == "\x7f" for c in url):
+        return ""
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc.lower() != (parsed.hostname or ""):
+            return ""
+    except ValueError:
+        return ""
+    return url if host_allowed(url, trust.BROWSER_HOSTS) else ""
+
+
 def fetch_bytes(url: str, cap: int, timeout: float = TIMEOUT_SECONDS) -> bytes:
     """GET ``url`` over https, no cookies, no identifiers, at most ``cap`` bytes.
 
@@ -75,6 +104,12 @@ def fetch_bytes(url: str, cap: int, timeout: float = TIMEOUT_SECONDS) -> bytes:
             data = response.read(cap + 1)
     except FeedProblem:
         raise
+    except urllib.error.HTTPError as error:
+        # The server was reached and answered: say what it answered, not that it could not be reached.
+        if error.code == 404:
+            raise FeedNotPublished(NOT_PUBLISHED) from error
+        raise FeedProblem("The release server answered with an error (HTTP %d). Try again later." % error.code) \
+            from error
     except Exception as error:
         raise FeedProblem("Could not reach the release server.") from error
     if len(data) > cap:
@@ -162,7 +197,10 @@ def fetch_release(
             raw = fetch(endpoint, FEED_CAP)
             sig_text = fetch(endpoint + ".minisig", FEED_CAP).decode("utf-8", errors="replace")
         except FeedProblem as problem:
-            last = problem
+            # A server that answered "no feed here" is the truer thing to say than another that could not
+            # be reached at all, whichever was asked first.
+            if not isinstance(last, FeedNotPublished):
+                last = problem
             continue
         release = parse_feed(raw, sig_text, pubs)
         return Release(**{**release.__dict__, "endpoint": endpoint})

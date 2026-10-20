@@ -151,8 +151,12 @@ def main():
     check("Developer has no newline", loaded["Developer"], "StudioX")
     check("nested list string sanitized", loaded["GameExecutables"], ["playme.exe"])
     check("non-strings pass through", loaded["SteamButton"], True)
-    says("load_profile calls sanitize_profile_data",
-         calls_name(extract_methods(src, "RialtoApp", ["load_profile"]),
+    # Since 1.5.1 Load Profile asks for the file and apply_profile_file reads
+    # it (the Build Queue applies each row's profile the same way).
+    says("load_profile hands the file to apply_profile_file",
+         "self.apply_profile_file(file_path)" in extract_methods(src, "RialtoApp", ["load_profile"]))
+    says("apply_profile_file calls sanitize_profile_data",
+         calls_name(extract_methods(src, "RialtoApp", ["apply_profile_file"]),
                     "sanitize_profile_data"))
     says("load_last_used_profile calls sanitize_profile_data",
          calls_name(extract_methods(src, "RialtoApp", ["load_last_used_profile"]),

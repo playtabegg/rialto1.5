@@ -381,7 +381,7 @@ code, kbd {
   <header class="masthead">
     <div class="disc" aria-hidden="true"></div>
     <div>
-      <p class="kicker">We the Indies &middot; Disc Builder &middot; Version 1.5</p>
+      <p class="kicker">We the Indies &middot; Disc Builder &middot; Version 1.5.1</p>
       <h1>Rialto<em>.</em></h1>
       <p class="standfirst">Your finished Windows game goes in. A disc image comes out,
       with a menu, an installer, an icon and everything a boxed copy needs.</p>
@@ -395,8 +395,12 @@ code, kbd {
     <a href="#need">What you need</a>
     <a href="#folder">Your game folder</a>
     <a href="#fields">Every field</a>
+    <a href="#games">Games on Disc</a>
     <a href="#extras">Disc extras</a>
     <a href="#media">Discs and sizes</a>
+    <a href="#compression">Compression</a>
+    <a href="#queue">The Build Queue</a>
+    <a href="#pressing">Pressing your disc</a>
     <a href="#trouble">When it goes wrong</a>
     <a href="#specs">The fine print</a>
   </nav>
@@ -426,7 +430,7 @@ code, kbd {
       <div>
         <h3>Preview, then build</h3>
         <p><b>Preview Disc Menu</b> opens the real menu in a few seconds so you can look at it
-        before committing. Then <b>Build Game Installer</b>. Your ISO lands in the
+        before committing. Then <b>BUILD GAME INSTALLER</b>. Your ISO lands in the
         <code>output</code> folder, ready for any disc writing tool.</p>
       </div>
     </div>
@@ -435,8 +439,10 @@ code, kbd {
   <div class="note tip">
     <strong>The bar along the bottom</strong>
     A small disc fills up as you go, showing how much of your chosen media the
-    game takes. It measures your folder before compression, so the finished ISO
-    is usually a little smaller than the number shown.
+    game takes. It measures your folder before compression, so with Balanced or
+    Smallest disc the finished ISO is often smaller than the number shown, and
+    with Fastest install about the same. During a build the same line says what
+    Rialto is doing, how far it has got and for how long.
   </div>
 
   <h2 id="need">What you need<span>02</span></h2>
@@ -447,8 +453,8 @@ code, kbd {
       <table>
         <tbody>
           <tr><td>Windows</td><td>10 or 11</td></tr>
-          <tr><td>Inno Setup 6</td><td>Free. Builds the installer. Version 6, not 7.<br><code>jrsoftware.org/isdl.php</code></td></tr>
-          <tr><td>An ISO tool</td><td><code>oscdimg</code> from the Windows ADK (Deployment Tools), or <code>mkisofs</code> on your PATH. Rialto finds both.</td></tr>
+          <tr><td>Nothing else</td><td>Rialto carries Inno Setup 6.5.4, which builds the installer, and <code>mkisofs</code>, which writes the disc image. If you have Inno Setup or the Windows ADK installed, Rialto uses yours. The log says which.</td></tr>
+          <tr><td>A license</td><td>Inno Setup is free. Its makers ask businesses earning over USD 5,000 a year to buy a license, so the log may show its "Non-commercial use only" line.<br><code>jrsoftware.org/isorder.php</code></td></tr>
           <tr><td>Python</td><td>Only if you run from source. The release build carries its own.</td></tr>
         </tbody>
       </table>
@@ -519,9 +525,10 @@ code, kbd {
   <table>
     <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
     <tbody>
-      <tr><td>Games on Disc</td><td>Leave it on auto-detect for a normal single-game disc. Tick two or more games under <b>Configure</b> and players get a "choose your game" screen: double features, demo collections, anthologies.</td></tr>
+      <tr id="games"><td>Games on Disc</td><td>Leave it alone for a normal single-game disc: Rialto finds the game by itself. Click <b>Add Games</b>, then double-click two or more games to tick them, and players get the Choose Your Game page: double features, demo collections, anthologies. For a demo disc, put each game in a folder of its own inside your game folder and click <b>Find a game in each folder</b>: every folder becomes a game, named after the folder, with an <code>icon.ico</code>, <code>icon.png</code>, <code>cover.png</code> or <code>cover.jpg</code> from that folder as its picture. Give each one a line under <b>One line about it</b>, set the order the Choose Your Game page shows with <b>Move Up</b> and <b>Move Down</b>, and tick <b>A Start Menu shortcut for each game</b> if players should be able to start a game without the menu. Once the games are installed, the main menu lists every game under <b>Play Games</b>, A to Z, and <b>Play Games</b> opens the Choose Your Game page, where players can sort the games and star favorites. A starred game moves to the top of both lists. To look at it before you build, click <b>Preview Disc Menu</b>, then <b>PLAY GAMES</b>.</td></tr>
       <tr><td>Target Media</td><td>The disc you plan to write. If the game will not fit, Rialto splits the installer and builds a numbered multi-disc set on its own.</td></tr>
-      <tr><td>Disc Extras</td><td>Bonus content, mods, an Add to Steam button, Mac and Linux builds. All optional. See below.</td></tr>
+      <tr><td>Disc Extras</td><td>Bonus content, mods, an Add to Steam button, a compatibility mode, files for the player's PC, Mac and Linux builds. All optional. See below.</td></tr>
+      <tr><td>Files to Place on the PC</td><td>In <b>Disc Extras</b>, the <b>Files to Place on the PC</b> button at the bottom left (and in the <b>Disc</b> menu). For a game that needs files it would normally make on its first run, such as a mod's settings or a pre-made save: add each file or folder and pick where the installer copies it, in Documents, Saved Games, AppData (Roaming, Local or LocalLow) or the install folder, plus a sub-folder typed the way the game expects it, like <code>MyStudio\MyGame</code>. A file the player already has is never replaced unless you untick <b>Keep existing</b>, and the files stay after an uninstall unless you tick <b>Remove on uninstall</b>, so saves are safe both ways. Files go to the account of whoever installs the game. Keep the files in a folder inside your game folder: Rialto only places files from there. Outside the install folder it places data only, never a program, script or shortcut, and never into a folder Windows starts programs from. Windows only: Mac and Linux builds have no installer.</td></tr>
     </tbody>
   </table>
 
@@ -530,7 +537,7 @@ code, kbd {
     <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
     <tbody>
       <tr><td>Menu Background</td><td>The disc menu's backdrop. An animated GIF is the sweet spot: it loops, it is small, and <code>ezgif.com</code> makes one out of a video clip in a minute.</td></tr>
-      <tr><td>Game Logo</td><td>Front and centre on the menu. Transparent PNG.</td></tr>
+      <tr><td>Game Logo</td><td>Front and center on the menu. Transparent PNG.</td></tr>
       <tr><td>Company Logo</td><td>Bottom corner of the menu. Small transparent PNG, around 150x75.</td></tr>
       <tr><td>Game Icon</td><td>The installer, the Start Menu entry, the desktop shortcut. A 256x256 .ico.</td></tr>
       <tr><td>Disc Icon</td><td>What File Explorer shows on the drive. Usually the same file as Game Icon, but it is a separate box because it does not have to be.</td></tr>
@@ -586,19 +593,24 @@ code, kbd {
   <h2 id="media">Discs and sizes<span>06</span></h2>
 
   <table>
-    <caption>Pick the media you actually own. Rialto keeps 96 MB free on each disc for the menu, the setup stub and the filesystem.</caption>
+    <caption>Pick the media you actually own. Rialto keeps 96 MB free on each disc for the menu, the setup stub and the filesystem. On a Mini disc the meter shows the whole disc less the filesystem, because the menu is already in its count.</caption>
     <thead><tr><th style="width:16rem">Target Media</th><th style="width:7rem">Capacity</th><th>Worth knowing</th></tr></thead>
     <tbody>
       <tr><td>Auto (single disc)</td><td>no limit</td><td>One image, any size. No splitting, no capacity check.</td></tr>
+      <tr><td>Mini CD 210 MB (8 cm)</td><td>0.22 GB</td><td>The small 8 cm disc, for a demo or a bonus. Use a tray drive: a slot drive can jam on one.</td></tr>
       <tr><td>CD 700 MB</td><td>0.74 GB</td><td>Small games and soundtracks.</td></tr>
+      <tr><td>Mini DVD 1.4 GB (8 cm)</td><td>1.46 GB</td><td>An 8 cm DVD. Same as the Mini CD: tray drives only.</td></tr>
       <tr><td>DVD 4.7 GB</td><td>4.7 GB</td><td>The default for a game disc.</td></tr>
       <tr><td>DVD DL 8.5 GB</td><td>8.5 GB</td><td>Dual layer. Slower to write, widely readable.</td></tr>
       <tr><td>M-DISC DVD 4.7 GB</td><td>4.7 GB</td><td>Same capacity, inorganic recording layer, rated for centuries. Needs an M-DISC capable writer.</td></tr>
-      <tr><td>Blu-ray 25 / 50 GB</td><td>25 / 50 GB</td><td>Needs a Blu-ray writer at both ends.</td></tr>
-      <tr><td>M-DISC Blu-ray 25 / 50 GB</td><td>25 / 50 GB</td><td>The archival version of the same discs.</td></tr>
-      <tr><td>Blu-ray XL 66 GB</td><td>66 GB</td><td>Triple layer, the same family 4K UHD discs come from.</td></tr>
-      <tr><td>Blu-ray XL 100 GB</td><td>100 GB</td><td>Also sold as M-DISC. Check your writer supports BDXL.</td></tr>
-      <tr><td>Blu-ray XL 128 GB</td><td>128 GB</td><td>Quad layer BD-R. The largest optical disc there is.</td></tr>
+      <tr><td>Blu-ray 25 GB</td><td>25 GB</td><td>Needs a Blu-ray writer at both ends.</td></tr>
+      <tr><td>Blu-ray DL 50 GB</td><td>50 GB</td><td>Dual layer Blu-ray.</td></tr>
+      <tr><td>M-DISC Blu-ray 25 GB</td><td>25 GB</td><td>The archival version of the same discs.</td></tr>
+      <tr><td>M-DISC Blu-ray DL 50 GB</td><td>50 GB</td><td>The archival version, dual layer.</td></tr>
+      <tr><td>Blu-ray XL 66 GB (4K UHD)</td><td>66 GB</td><td>Triple layer, the same family 4K UHD discs come from.</td></tr>
+      <tr><td>Blu-ray XL 100 GB</td><td>100 GB</td><td>Check your writer supports BDXL.</td></tr>
+      <tr><td>M-DISC Blu-ray XL 100 GB</td><td>100 GB</td><td>The archival version of BDXL.</td></tr>
+      <tr><td>Blu-ray XL 128 GB (BD-R quad layer)</td><td>128 GB</td><td>Quad layer BD-R. The largest optical disc there is.</td></tr>
     </tbody>
   </table>
 
@@ -607,6 +619,43 @@ code, kbd {
     Rialto switches the disc to UDF automatically when any single file passes 4 GB,
     because the older ISO 9660 filesystem cannot describe one.
   </div>
+
+  <h3 id="compression">Compression</h3>
+  <p>The <b>Compression</b> box on the Target Media row sets how hard the installer squeezes
+  your game. <b>Balanced</b> suits most games. <b>Smallest disc</b> squeezes hardest: a
+  smaller disc and a slower build. <b>Fastest install</b> stores the game as it is, so setup
+  only copies it. That can mean more discs, and the size estimate becomes exact. Most modern
+  games are already compressed inside, so storing them often costs little.</p>
+
+  <h3 id="queue">The Build Queue</h3>
+  <p><b>Build Queue</b>, beside <b>Browse for your game folder</b> (and in the <b>Disc</b> menu), builds several discs one after another. Add a saved profile
+  and the game folder it builds, as many times as you like, tick the rows to build and press
+  <b>Build All</b>. Each row builds exactly as BUILD GAME INSTALLER would, nothing stops to ask
+  a question, and at the end one summary lists every disc and its size, or why a row failed.
+  <b>Stop After This One</b> finishes the disc in progress and leaves the rest. Save a queue to
+  build the same set again after a patch. Your own form comes back as it was when the queue
+  ends.</p>
+
+  <p>While any build runs, the line under the log says what Rialto is doing and how far it is,
+  with the time so far: copying your game and its extras, compressing the installer, signing,
+  writing the disc image, checksumming it for a plant.
+  The window keeps answering, so you can move it and scroll the log; the rest of the page
+  waits until the build ends.</p>
+
+  <h3 id="pressing">Pressing your disc</h3>
+  <p>Tick <b>Pressed</b> beside Target Media when a plant will make your discs rather than
+  you burning them. The disc is the same image either way. Rialto adds what the plant asks
+  for: <code>Chksum.md5</code>, and a master sheet with each image's size in sectors, its
+  checksum, its volume label and whether setup.exe is signed. For DVD DL it works out the
+  layer break, and says so when your game would fit a single-layer DVD, which presses
+  cheaper. Pressing works with CD and DVD, full size or 8 cm, and DVD DL, made with
+  <code>mkisofs</code>. The sheet names a Mini as an 8 cm CD-ROM or an 8 cm DVD-5, which
+  some plants call DVD-1.
+  Before you order, ask the plant three things: do they press a data disc from an ISO image,
+  will they press a data Blu-ray without copy protection, and for DVD DL do they want one
+  image with the break on a sheet or one image per layer. This follows the plants' published
+  specifications and has not been through a real pressing yet. Turn on <b>Sign Final
+  Build</b> first: nobody can re-sign a disc once the plant has it.</p>
 
   <div class="colophon">
     <span><strong>Rialto 1.5</strong> &middot; We the Indies&trade;</span>
@@ -629,19 +678,19 @@ code, kbd {
       </tr>
       <tr>
         <td>Nothing happens on double-click (source checkout)</td>
-        <td><code>Rialto.pyw</code> runs windowless, so a startup error has nowhere to print. Run <code>debug_rialto.bat</code> instead: same thing, with a console, and it pauses on every error.</td>
+        <td><code>Rialto.pyw</code> runs windowless, so a startup error has nowhere to print. Run <code>scripts\debug_rialto.bat</code> instead: same thing, with a console, and it pauses on every error.</td>
       </tr>
       <tr>
         <td>Windows says Python is installed but Rialto disagrees</td>
         <td>A clean Windows ships a placeholder at <code>%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe</code> that only opens the Store. Install the real one from python.org with "Add python.exe to PATH" ticked.</td>
       </tr>
       <tr>
-        <td>The build stops at the installer step</td>
-        <td>Inno Setup 6 is missing. Install it, in either install mode, and try again. Inno Setup 7 on its own is not enough: Rialto 1.5 builds with 6.</td>
+        <td>The pre-build check says a tool is missing</td>
+        <td>This copy of <code>Rialto.exe</code> is missing the tools it carries. Download Rialto again and keep the whole folder. Or install Inno Setup 6, or the Windows ADK with Deployment Tools ticked.</td>
       </tr>
       <tr>
-        <td>No ISO at the end</td>
-        <td>Rialto found neither <code>oscdimg</code> nor <code>mkisofs</code>, or the one it found failed (the log says which). Install the Windows ADK with Deployment Tools ticked, or put <code>mkisofs</code> on your PATH.</td>
+        <td>A ZIP instead of an ISO</td>
+        <td>Every disc image tool Rialto tried failed. The log names each one and what went wrong. Check free disk space and that no scanner is holding the build folder, then build again.</td>
       </tr>
       <tr>
         <td>The disc menu says the game executable was not found</td>
@@ -661,6 +710,9 @@ code, kbd {
       <h3>What lands in output</h3>
       <p>One <code>.iso</code> per disc, named after your game. Everything else Rialto used to
       build it is cleaned up. Write the ISO with any disc writing tool.</p>
+      <p>Every build starts clean: Rialto clears <code>output\&lt;your game&gt;</code> first,
+      earlier disc images included, and the log says so. To keep an image, for example to
+      compare two Compression choices, move it out of that folder before building again.</p>
 
       <h3>What the disc contains</h3>
       <p><code>setup.exe</code> and its data slices, a <code>menu\</code> folder holding the disc menu
@@ -695,6 +747,20 @@ code, kbd {
       <h3>Controllers</h3>
       <p>The disc menu is fully navigable with a gamepad, because a disc very often ends up
       in a machine plugged into a television.</p>
+
+      <h3 id="windows7">Windows 7 and 8</h3>
+      <p>The disc menu needs Windows 8.1 or later. The installer still runs on Windows 7 SP1
+      and Windows 8, where the player opens <code>setup.exe</code> on the disc, and there its
+      Start Menu and desktop shortcuts start the game itself instead of the menu: one shortcut
+      for each game on a disc of several. The player loses the menu, not the game. This was
+      checked under Windows' own Windows 7 compatibility mode, not on a Windows 7 PC.</p>
+
+      <h3 id="short-screen">A short screen</h3>
+      <p>Rialto's window is 700 wide and as tall as your screen allows. The three steps card
+      starts folded on every screen (<b>Show</b> opens it). When the page still does not fit,
+      Rialto lays the same page out in fewer lines, up to three times: fields two to a row and less space
+      between them. No text gets smaller and nothing scrolls. On a very short screen the log
+      is cut first, and the log says so. Lowering Windows' display Scale makes room.</p>
     </div>
   </div>
 
@@ -706,7 +772,7 @@ code, kbd {
   </div>
 
   <div class="colophon">
-    <span><strong>Rialto 1.5</strong> &middot; Built by Chandler at We the Indies&trade; &middot; MIT licensed &middot; wetheindies.com</span>
+    <span><strong>Rialto 1.5.1</strong> &middot; Built by Chandler at We the Indies&trade; &middot; MIT licensed &middot; wetheindies.com</span>
     <span>Keep physical media alive.</span>
   </div>
 </section>

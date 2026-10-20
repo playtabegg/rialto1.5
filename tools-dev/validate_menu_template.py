@@ -112,7 +112,7 @@ def check(path):
     base = set(langs["English"])
     print(f"       English keys ({len(base)}): {sorted(base)}")
     for required in ("play", "bonus", "mods", "mods_not_found", "bonus_not_found",
-                     "uninstall", "exit", "game_not_found"):
+                     "uninstall", "exit", "game_not_found", "play_games", "steam", "tip_star"):
         if required not in base:
             print(f"[FAIL] English translation missing key '{required}'")
             ok = False
@@ -191,6 +191,11 @@ def check_self_references(menu_tree):
     defined = {i.name for i in cls.body if isinstance(i, ast.FunctionDef)}
     defined |= {t.id for i in cls.body if isinstance(i, ast.Assign)
                 for t in i.targets if isinstance(t, ast.Name)}
+    # a class made inside a method (the Choose Your Game page's GameRow): its own methods
+    # are what its self.x calls reach
+    for node in ast.walk(cls):
+        if isinstance(node, ast.ClassDef) and node is not cls:
+            defined |= {i.name for i in node.body if isinstance(i, ast.FunctionDef)}
     # anything assigned as self.x = ... anywhere in the class
     for node in ast.walk(cls):
         if isinstance(node, ast.Assign):

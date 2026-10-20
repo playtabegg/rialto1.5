@@ -135,7 +135,7 @@ def build_host(src, sizes, **attrs):
     methods = extract_methods(src, "RialtoApp", [
         "_collect_disc_fileset",
         "default_mod_dir", "resolved_mod_dir", "staged_mod_dir_name",
-        "_fileset_size",
+        "_fileset_size", "_fileset_disc_bytes",
         "_fileset_needs_udf",
         "create_spanned_isos",
     ])
@@ -217,6 +217,7 @@ def run_span(base, src, media_types, reserve, media_label,
     out, sizes = make_output_tree(base, bonus_bytes, bin_bytes)
     host = build_host(src, sizes,
                       MEDIA_RESERVE=reserve,
+                      SPAN_MARGIN=extract_class_constant(src, "RialtoApp", "SPAN_MARGIN"),
                       mod_launcher_var=Flag(True),
                       target_media_var=Flag(media_label))
     host.create_spanned_isos(out, {"GameName": "MockGame", "Title": "Mock Game"},
@@ -331,6 +332,22 @@ def main():
             print(f"    {line}")
         check("an oversized slice is warned about too", len(warn_lines(host)) >= 1, True)
         check("the set is still built", len(host.built) >= 1, True)
+        print()
+
+        # E (1.5.1): the slices Inno cuts at the media less the reserve, as a
+        # real build does, with a small base. The reserve is the room Disc 1's
+        # menu and setup.exe ride in, so the first slice shares Disc 1 and the
+        # small last slice shares Disc 2. 1.5.0 counted the reserve twice and
+        # made four CDs of this (seen in a real 1.2 GB queue build).
+        cd = capacity_of(media_types, "CD 700 MB")
+        host = run_span(os.path.join(base, "E"), src, media_types, reserve,
+                        "CD 700 MB", bonus_bytes=0,
+                        bin_bytes=[cd - reserve, cd - reserve, 10 * MB])
+        print("Scenario E - two full CD slices and a small one, with a 72 MB base (menu, setup, a mod tool)")
+        check("two discs, not four", len(host.built), 2)
+        check("the first slice rides on Disc 1 with the menu",
+              "setup-1.bin" in (host.built[0][1] if host.built else []), True)
+        check("nothing overflows", warn_lines(host), [])
         print()
     finally:
         shutil.rmtree(base, ignore_errors=True)

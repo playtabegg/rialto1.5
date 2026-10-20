@@ -12,7 +12,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-import trusted_signing  # noqa: E402
+from rialto import trusted_signing  # noqa: E402
 
 failures = []
 

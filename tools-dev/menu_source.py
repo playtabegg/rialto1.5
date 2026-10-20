@@ -1,7 +1,7 @@
 """Pull the disc-menu source out of Rialto.pyw without importing it.
 
 `MENU_TEMPLATE_SOURCE` in Rialto.pyw is the single copy of the disc menu. The
-pre-built menu.exe is frozen from it (menu.spec) and the harnesses check it
+pre-built menu.exe is frozen from it (packaging/menu.spec) and the harnesses check it
 (validate_menu_template.py), so both read it straight out of the file rather
 than keeping a second copy that could drift.
 

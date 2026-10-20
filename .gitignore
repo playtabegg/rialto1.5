@@ -43,6 +43,12 @@ templates/*_temp.json
 tools/TrustedSigning/
 tools/innoextract/
 
+# ---------- Tools Rialto carries inside Rialto.exe (1.5.1) ----------
+# Binaries stay out of git: tools-dev/fetch_helpers.py copies them in and
+# checks each against helpers/MANIFEST.json, which is tracked.
+helpers/*
+!helpers/MANIFEST.json
+
 # ---------- Logs and temp ----------
 *.log
 *.tmp

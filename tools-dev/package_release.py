@@ -8,7 +8,7 @@ in the output, and refuses unsigned binaries unless --allow-unsigned is set.
 
 Usage:
     python tools-dev/package_release.py --source dist --output release\\Rialto-1.5
-    python tools-dev/package_release.py --source dist --output release\\Rialto-1.5.zip
+    python tools-dev/package_release.py --source dist --output release\\Rialto-1.5.1-Disc-Maker.zip
     python tools-dev/package_release.py --source dist --output release\\Rialto-1.5 --allow-unsigned
 """
 import argparse
@@ -22,18 +22,21 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
+# Files by their path in the source, forward slashes. The launchers live in scripts/ and the
+# specs in packaging/ (1.5.1); only these named files are taken from those folders.
 ALLOWED_ROOT_FILES = frozenset({
     "Rialto.exe",
     "menu.exe",
     "README.md",
     "SIGNING.md",
     "requirements.txt",
-    "launch_rialto.bat",
-    "debug_rialto.bat",
-    "rialto.spec",
-    "menu.spec",
+    "scripts/launch_rialto.bat",
+    "scripts/debug_rialto.bat",
+    "packaging/rialto.spec",
+    "packaging/menu.spec",
 })
-ALLOWED_ROOT_DIRS = frozenset({"assets", "docs"})
+# licenses/ (1.5.1): the license texts and source notes for the tools Rialto.exe carries.
+ALLOWED_ROOT_DIRS = frozenset({"assets", "docs", "licenses"})
 REQUIRED_BINARIES = ("Rialto.exe", "menu.exe")
 
 FORBIDDEN_NAMES = frozenset({
@@ -75,7 +78,7 @@ def collect_planned(source):
     """Explicit allow-list of relative paths that will be copied."""
     planned = []
     for name in sorted(ALLOWED_ROOT_FILES):
-        path = os.path.join(source, name)
+        path = os.path.join(source, *name.split("/"))
         if os.path.isfile(path):
             planned.append(name)
     for dirname in sorted(ALLOWED_ROOT_DIRS):

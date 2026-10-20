@@ -94,6 +94,16 @@ def main():
     exec(module_closure(src, used), ns)
     exec("class Host:\n" + textwrap.indent("\n\n".join(bodies), "    "), ns)
 
+    # The generators write in the PC's own code page. On a UTF-8 machine that
+    # proves nothing, so their open() is the one a Windows-1252 PC would have.
+    import builtins
+
+    def cp1252_open(file, mode="r", *args, **kwargs):
+        if "b" not in mode and "encoding" not in kwargs and len(args) < 2:
+            kwargs["encoding"] = "cp1252"
+        return builtins.open(file, mode, *args, **kwargs)
+    ns["open"] = cp1252_open
+
     for title in TITLES:
         base = tempfile.mkdtemp(prefix="rialto_titles_")
         try:
@@ -112,6 +122,12 @@ def main():
                 crashed = error
             ok("%s: the helper files are written without a crash" % title, crashed is None, repr(crashed))
             ok("%s: menu.bat exists" % title, os.path.isfile(os.path.join(base, "menu.bat")))
+            try:
+                with open(os.path.join(base, "menu.bat"), encoding="cp1252") as bat:
+                    reads = "@echo off" in bat.read()
+            except (OSError, UnicodeDecodeError):
+                reads = False
+            ok("%s: menu.bat is written in a Windows-1252 PC's code page" % title, reads)
             autorun = os.path.join(base, "autorun.inf")
             text = open(autorun, encoding="cp1252").read() if os.path.isfile(autorun) else ""
             ok("%s: autorun.inf exists and still opens setup.exe" % title,

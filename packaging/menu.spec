@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the generic disc menu, menu.exe.
 
-Build with:  pyinstaller menu.spec      ->  dist/menu.exe
+Build with:  pyinstaller packaging/menu.spec      ->  dist/menu.exe      (from the repo root)
+
+This file lives in packaging/; every path below is taken from ROOT, the folder
+above it, where Rialto.pyw is.
 
 This is the one menu executable every disc gets. It is title-agnostic: the
 title, the button set, the game list, the language, the branding flag and the
@@ -34,13 +37,16 @@ from PyInstaller.utils.win32.versioninfo import (
     VSVersionInfo,
 )
 
-sys.path.insert(0, os.path.join(SPECPATH, "tools-dev"))
+# This spec sits in packaging/. Everything it builds from is one folder up.
+ROOT = os.path.dirname(SPECPATH)
+
+sys.path.insert(0, os.path.join(ROOT, "tools-dev"))
 from menu_source import write_menu_source  # noqa: E402
 
 # Extract the disc menu out of Rialto.pyw. Single source of truth.
 MENU_SCRIPT = write_menu_source(
-    os.path.join(SPECPATH, "build", "menu_src"),
-    rialto_path=os.path.join(SPECPATH, "Rialto.pyw"),
+    os.path.join(ROOT, "build", "menu_src"),
+    rialto_path=os.path.join(ROOT, "Rialto.pyw"),
 )
 
 import re as _re
@@ -48,7 +54,7 @@ import re as _re
 # The version lives in Rialto.pyw (`__version__`); this reads that line so a
 # release cannot ship with the file properties and the About text apart.
 # tools-dev/test_version_agreement.py pins the three together.
-with open(os.path.join(SPECPATH, "Rialto.pyw"), encoding="utf-8") as _src:
+with open(os.path.join(ROOT, "Rialto.pyw"), encoding="utf-8") as _src:
     _match = _re.search(r'^__version__ = "(\d+)\.(\d+)\.(\d+)"', _src.read(), _re.M)
 if not _match:
     raise SystemExit("Rialto.pyw has no __version__ = \"X.Y.Z\" line")
@@ -136,6 +142,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(SPECPATH, 'assets', 'menu_icon.ico'),
+    icon=os.path.join(ROOT, 'assets', 'menu_icon.ico'),
     version=version_resource,
 )

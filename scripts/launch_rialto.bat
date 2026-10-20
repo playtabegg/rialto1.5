@@ -4,14 +4,18 @@ setlocal
 :: You usually don't need this file: double-click Rialto.pyw instead
 :: (Rialto installs its own dependencies on first run), then use
 :: File > Put Rialto on the Desktop inside the app to launch it like a normal app.
-cd /d "%~dp0"
+::
+:: This file lives in scripts\. Rialto.pyw is in the folder above it, the
+:: Rialto folder, and that is where Rialto runs from.
+for %%I in ("%~dp0..") do set "RIALTO_DIR=%%~fI"
+cd /d "%RIALTO_DIR%"
 
 :: cmd looks in the current directory before it looks at PATH, and the current
 :: directory is now the Rialto folder - the same folder people unpack downloads
 :: into. A python.exe sitting there would be run in preference to the real one,
 :: so say so rather than run it.
-if exist "%~dp0python.exe" goto :local_python
-if exist "%~dp0pythonw.exe" goto :local_python
+if exist "%RIALTO_DIR%\python.exe" goto :local_python
+if exist "%RIALTO_DIR%\pythonw.exe" goto :local_python
 goto :no_local_python
 :local_python
 echo.
@@ -47,10 +51,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "%~dp0Rialto.pyw" (
+if not exist "%RIALTO_DIR%\Rialto.pyw" (
     echo.
-    echo [ERROR] Rialto.pyw was not found next to this launcher.
-    echo   Run this file from inside the Rialto folder.
+    echo [ERROR] Rialto.pyw was not found in the folder above this launcher.
+    echo   Run this file from the scripts folder inside the Rialto folder.
     echo.
     pause
     exit /b 1
@@ -65,12 +69,12 @@ set "RIALTO_PYW="
 for /f "usebackq delims=" %%P in (`python -c "import os,sys;print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"`) do set "RIALTO_PYW=%%P"
 
 if defined RIALTO_PYW if exist "%RIALTO_PYW%" (
-    start "" "%RIALTO_PYW%" "%~dp0Rialto.pyw"
+    start "" "%RIALTO_PYW%" "%RIALTO_DIR%\Rialto.pyw"
     endlocal
     exit /b 0
 )
 
 echo [Launch] pythonw.exe is missing - starting Rialto with a console window.
-start "" python "%~dp0Rialto.pyw"
+start "" python "%RIALTO_DIR%\Rialto.pyw"
 endlocal
 exit /b 0

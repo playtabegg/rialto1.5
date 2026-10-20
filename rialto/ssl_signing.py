@@ -17,7 +17,7 @@ import subprocess
 
 def _signtool():
     try:
-        import trusted_signing
+        from . import trusted_signing
         found = trusted_signing.find_signtool()
         if found:
             return found

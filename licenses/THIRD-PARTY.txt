@@ -1,0 +1,85 @@
+Rialto 1.5.1: the tools it carries
+==================================
+
+Rialto is MIT licensed (see LICENSE). Rialto.exe also carries three programs
+made by other people, so that nobody has to install them. Rialto runs each one
+as a separate program. None of them is changed. If Inno Setup or the Windows
+ADK is already installed on your PC, Rialto uses yours and leaves these alone.
+
+Inside Rialto.exe they sit in helpers\inno and helpers\cdrtools. Rialto runs
+only these copies, never a helpers folder put beside Rialto.exe.
+
+
+1. Inno Setup 6.5.4 (helpers\inno)
+----------------------------------
+What it does:   compiles the installer (setup.exe) for your game.
+Made by:        Jordan Russell and Martijn Laan. https://jrsoftware.org/
+License:        the Inno Setup License. Its text is in InnoSetup-license.txt
+                here and in helpers\inno\license.txt.
+Source:         https://github.com/jrsoftware/issrc (tag is-6_5_4)
+Files carried:  ISCC.exe, ISCmplr.dll, ISPP.dll, ISPPBuiltins.iss, Setup.e32,
+                SetupLdr.e32, islzma.dll, Default.isl, license.txt, the five
+                .issig signature files, and 20 files in Languages\.
+                Unmodified, from the signed 6.5.4 release.
+
+The license lets anyone use and pass on Inno Setup, for any purpose. Inno
+Setup's makers ask businesses and freelancers who earn more than USD 5,000 a
+year to buy a commercial license: https://jrsoftware.org/isorder.php
+That is a request, not a condition of the license. Rialto's log may show
+Inno Setup's "Non-commercial use only" line. It is about this request. The
+installers it makes carry no such line.
+
+
+2. mkisofs 3.02a10 (helpers\cdrtools\mkisofs.exe)
+-------------------------------------------------
+What it does:   writes the disc image (.iso).
+Made by:        Joerg Schilling and the cdrtools authors (Eric Youngdale,
+                James Pearson, HELIOS Software GmbH and others).
+Build:          "mkisofs 3.02a10 2021/07/23 (i686-pc-cygwin)", the Windows
+                build that cdrtfe ships, taken unmodified from cdrtfe's
+                portable zip (cdrtfe-1.5.9.1.zip, SHA-256
+                86a6d8ad02351303ab2ec6dcfa9b2e97514a2a6586751adabc5c6ca10e117e12).
+                Rialto's mkisofs.exe and cygwin1.dll match the two files in
+                that zip byte for byte (checked 18 October 2026).
+License:        mkisofs is under the GNU General Public License, version 2
+                or (at your option) any later version. Its text is in
+                GPL-2.0.txt here and in helpers\cdrtools. Parts of cdrtools
+                built into it (the schily libraries) are under the Common
+                Development and Distribution License (CDDL) 1.0, whose
+                text is in CDDL-1.0.txt here and in helpers\cdrtools
+                (taken from the source's own CDDL.Schily.txt).
+Source:         cdrtfe names the source this build came from:
+                https://cdrtfe.sourceforge.io/tools/index_en.html
+                https://sourceforge.net/projects/cdrtfe/files/tools/source/cdrtools/schily-2021-09-18.tar.bz2
+                https://sourceforge.net/projects/cdrtfe/files/tools/source/cdrtools/cdrtools-patch.rar
+                Upstream (schilytools):
+                https://sourceforge.net/projects/schilytools/files/
+                https://codeberg.org/schilytools/schilytools
+
+
+3. Cygwin DLL 2.3.1 (helpers\cdrtools\cygwin1.dll)
+--------------------------------------------------
+What it does:   lets mkisofs run on Windows. mkisofs does nothing without it.
+Made by:        the Cygwin authors (Red Hat, Inc. and others).
+                https://cygwin.com/
+License:        the GNU General Public License, version 3 or (at your
+                option) any later version. Its text is in GPL-3.0.txt here
+                and in helpers\cdrtools. Cygwin moved to the LGPL only with
+                version 2.5.2 (June 2016); this is 2.3.1 (November 2015).
+Source:         the Cygwin source at the tag cygwin-2_3_1-release:
+                https://sourceware.org/git/?p=newlib-cygwin.git;a=tag;h=refs/tags/cygwin-2_3_1-release
+                (a mirror: https://github.com/mirror/newlib-cygwin/tree/cygwin-2_3_1-release)
+                The release announcement:
+                https://sourceware.org/ml/cygwin-announce/2015-11/msg00042.html
+                Older Cygwin packages, source included (cygwin-2.3.1-1-src):
+                http://www.crouchingtigerhiddenfruitbat.org/Cygwin/timemachine.html
+
+
+Getting the source from us
+--------------------------
+We The Indies publishes the corresponding source of mkisofs (schily-2021-09-18
+and cdrtfe's patch) and of cygwin1.dll 2.3.1 beside each Rialto release that
+carries them, at https://github.com/playtabegg/rialto1.5/releases. For at
+least three years from each such release, anyone may also ask us for a copy
+of that source through https://github.com/playtabegg/rialto1.5/issues, at no
+charge beyond the cost of sending it.

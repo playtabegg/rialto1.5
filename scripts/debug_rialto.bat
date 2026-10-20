@@ -1,13 +1,18 @@
 @echo off
+setlocal
 :: Rialto 1.5 debug launcher.
 :: Same as launch_rialto.bat, but keeps a console attached so errors
 :: are visible. Rialto installs its own dependencies on first run.
-cd /d "%~dp0"
+::
+:: This file lives in scripts\. Rialto.pyw is in the folder above it, the
+:: Rialto folder, and that is where Rialto runs from.
+for %%I in ("%~dp0..") do set "RIALTO_DIR=%%~fI"
+cd /d "%RIALTO_DIR%"
 
 :: cmd looks in the current directory before PATH, so a python.exe dropped into
 :: the Rialto folder would win over the real one. Same guard as launch_rialto.
-if exist "%~dp0python.exe" goto :local_python
-if exist "%~dp0pythonw.exe" goto :local_python
+if exist "%RIALTO_DIR%\python.exe" goto :local_python
+if exist "%RIALTO_DIR%\pythonw.exe" goto :local_python
 goto :no_local_python
 :local_python
 echo.
@@ -28,7 +33,7 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Python was not found on your PATH.
     echo.
-    echo   Install Python 3.9+ from https://www.python.org/downloads/
+    echo   Install Python 3.12 (3.9 to 3.12 are tested) from https://www.python.org/downloads/
     echo   and tick "Add python.exe to PATH" during setup, then open a
     echo   new window and run this file again.
     echo.
@@ -43,7 +48,7 @@ if errorlevel 1 (
 echo [DEBUG] Running Rialto with console output...
 echo.
 
-python "%~dp0Rialto.pyw"
+python "%RIALTO_DIR%\Rialto.pyw"
 
 echo.
 echo [DEBUG] Script ended. Check for errors above.

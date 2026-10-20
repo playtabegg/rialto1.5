@@ -206,7 +206,7 @@ def main():
                        "QtMultimedia", "self.media_player", "self.video_widget"):
             ok("no %s in the menu source" % banned, banned not in code_only)
         ok("the spec excludes QtMultimedia",
-           "'PyQt5.QtMultimedia'" in open(os.path.join(REPO, "menu.spec"),
+           "'PyQt5.QtMultimedia'" in open(os.path.join(REPO, "packaging", "menu.spec"),
                                           encoding="utf-8").read())
         ok("the GIF path survives", "QtGui.QMovie(gif_path)" in menu_src)
         ok("and the still-image path survives", 'background.jpg' in menu_src)
@@ -235,7 +235,10 @@ def main():
         open(os.path.join(rawdir, "data.pck"), "wb").write(PAD)
         open(os.path.join(rawdir, "lib.so"), "wb").write(ELF + PAD)
 
-        p = host(pack_src, {"sanitize_text": lambda v: str(v or "")},
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import progress_stub
+        pack_src += "\n\n" + progress_stub.methods(src)  # the packing moves the live line since 1.5.1 (B6)
+        p = host(pack_src, dict(progress_stub.namespace(), sanitize_text=lambda v: str(v or "")),
                  entries={"Title": Flag("MyGame")})
         out = os.path.join(base, "LinuxOut")
         os.makedirs(out, exist_ok=True)

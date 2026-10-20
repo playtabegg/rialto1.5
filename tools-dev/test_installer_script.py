@@ -46,18 +46,21 @@ def build_host(src):
     if not methods:
         raise SystemExit("could not extract generate_enhanced_installer_script")
 
-    # iss_value leans on module-level constants. Rather than naming them here
-    # and letting the list rot, take whatever globals it actually reads.
-    helper = next(n for n in tree.body
-                  if isinstance(n, ast.FunctionDef) and n.name == "iss_value")
-    reads = {n.id for n in ast.walk(helper)
+    # The module-level helpers lean on module-level constants. Rather than
+    # naming them here and letting the list rot, take whatever globals they
+    # actually read (the generator's own reads included: MENU_MIN_WINDOWS).
+    names = {"iss_value", "iss_relative_exe", "iss_parameters", "windows7_shortcut_lines",
+             "placed_subfolder", "placed_files_lines", "placed_files_root", "compression_setting",
+             "placed_row_problem", "placed_file_refused"}
+    helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    reads = {n.id for item in helpers + [ast.parse(m) for m in methods] for n in ast.walk(item)
              if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     constants = [ast.get_source_segment(src, node) for node in tree.body
                  if isinstance(node, ast.Assign)
                  and getattr(node.targets[0], "id", "") in reads]
-    module = constants + [ast.get_source_segment(src, helper)]
+    module = constants + [ast.get_source_segment(src, h) for h in helpers]
 
-    ns = {"os": os, "re": __import__("re"), "shutil": shutil}
+    ns = {"os": os, "re": __import__("re"), "shutil": shutil, "json": __import__("json")}
     exec("\n\n".join(module), ns)
     exec("class Host:\n" + textwrap.indent("\n\n".join(methods), "    "), ns)
     host = ns["Host"]()

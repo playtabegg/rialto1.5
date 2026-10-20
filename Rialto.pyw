@@ -22,6 +22,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 # First-run friendliness: if dependencies are missing, offer to install them
@@ -144,7 +145,7 @@ else:
                 )
                 raise SystemExit(1)
         else:
-            messagebox.showinfo("Rialto", "Setup cancelled. Run 'pip install -r requirements.txt' manually, then start Rialto again.")
+            messagebox.showinfo("Rialto", "Setup canceled. Run 'pip install -r requirements.txt' manually, then start Rialto again.")
             raise SystemExit(1)
 import atexit
 import threading
@@ -170,7 +171,7 @@ APP_NAME = "Rialto"
 #: The one place the version lives. rialto.spec and menu.spec read it from
 #: this line (tools-dev/test_version_agreement.py pins that), the release
 #: feed compares against it, and the About/Help text shows it.
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 # GOG import unpacks Inno Setup installers with innoextract, downloaded on
 # first use. Version and checksum are pinned together: bump both, never one.
@@ -300,8 +301,6 @@ CONFIG_FILE = os.path.join(APP_ROOT, "config.json")
 INPUT_DIR = os.path.join(APP_ROOT, "input")
 OUTPUT_DIR = os.path.join(APP_ROOT, "output")
 TEMPLATES_DIR = os.path.join(APP_ROOT, "templates")
-REQUIRED_TOOLS = ["AutoIt3.exe", "ISCC.exe"]
-ISO_TOOLS = ["mkisofs.exe", "oscdimg.exe"]
 LAST_PROFILE_FILE = os.path.join(APP_ROOT, "last_profile.json")
 LAST_SESSION_FILE = os.path.join(APP_ROOT, "last_session.json")
 
@@ -352,29 +351,36 @@ def _inno_setup_major(iscc_path):
 
 
 def find_inno_compiler():
-    """ISCC.exe from Inno Setup 6, or None.
+    """ISCC.exe from Inno Setup 6, else from Inno Setup 7, or None.
 
-    PATH first, as before, unless that ISCC.exe sits in the folder of another
-    Inno Setup version; then wherever the Inno Setup 6 installer put itself,
-    in either install mode.
+    PATH first, as before, unless that ISCC.exe sits in the folder of an Inno
+    Setup version Rialto has not been tested with; then wherever the Inno
+    Setup 6 installer put itself, in either install mode, then Inno Setup 7's.
+    7 since 1.5.1 (B4): Rialto's own scripts (one disc and a spanned set, all
+    21 languages) compiled with 7.1.0 raise the same three warnings as with 6,
+    and installed and uninstalled the same, byte for byte. 6 still comes first.
     """
     found = shutil.which("ISCC.exe")
     if found and _inno_setup_major(found) in (None, 6):
         return found
-    for folder in _inno_setup_folders(6):
-        candidate = os.path.join(folder, "ISCC.exe")
-        if os.path.isfile(candidate):
-            return candidate
+    for major in (6, 7):
+        for folder in _inno_setup_folders(major):
+            candidate = os.path.join(folder, "ISCC.exe")
+            if os.path.isfile(candidate):
+                return candidate
+    if found and _inno_setup_major(found) == 7:
+        return found
     return None
 
 
 def inno_setup_7_only():
     """True when Inno Setup 7 is installed and Inno Setup 6 is not.
 
-    Rialto 1.5 builds its installers with Inno Setup 6 and has not been tested
-    with 7, so the build names the problem instead of saying nothing was found.
+    Since 1.5.1 Rialto builds with 7 in that case (find_inno_compiler); the
+    build says so, so an author knows which compiler made their installer.
     """
-    if find_inno_compiler():
+    found = find_inno_compiler()
+    if found and _inno_setup_major(found) in (None, 6):
         return False
     on_path = shutil.which("ISCC.exe")
     if on_path and _inno_setup_major(on_path) == 7:
@@ -416,6 +422,203 @@ def find_iso_tools():
     return mkisofs, None
 
 
+# The tools Rialto carries (1.5.1): Inno Setup 6.5.4 and cdrtools 3.02a10's mkisofs, inside Rialto.exe, so
+# nobody has to install anything. A tool already on the PC always comes first and builds exactly as 1.5.0 did;
+# a carried one only fills the gap. tools-dev/fetch_helpers.py puts them in helpers/ and pins each file.
+CARRIED_INNO_VERSION = "6.5.4"
+
+
+# What each carried tool needs beside it to run at all (security and bugs reviews, 1.5.1). ISCC will not
+# start without its DLLs and their .issig files, and fails on a script whose language file is missing;
+# mkisofs prints nothing without cygwin1.dll. A helpers folder is used only when it holds the whole set.
+CARRIED_SETS = {
+    "inno": ("ISCC.exe", "ISCmplr.dll", "ISPP.dll", "ISPPBuiltins.iss", "Setup.e32", "SetupLdr.e32", "islzma.dll",
+             "Default.isl", "ISCmplr.dll.issig", "ISPP.dll.issig", "Setup.e32.issig", "SetupLdr.e32.issig",
+             "islzma.dll.issig") + tuple("Languages/%s.isl" % language for language in (
+                 "BrazilianPortuguese", "Catalan", "Czech", "Danish", "Dutch", "Finnish", "French", "German",
+                 "Hebrew", "Italian", "Japanese", "Norwegian", "Polish", "Portuguese", "Russian", "Slovak",
+                 "Slovenian", "Spanish", "Turkish", "Ukrainian")),
+    "cdrtools": ("mkisofs.exe", "cygwin1.dll"),
+}
+
+
+def helper_path(*parts):
+    """A file Rialto carries, or None. The first part names the tool's folder: "inno" or "cdrtools".
+
+    A frozen Rialto runs only the copies inside its own EXE (sys._MEIPASS, which lasts while Rialto runs),
+    never a helpers folder put beside Rialto.exe: nothing checks such a folder, and a zip unpacked into
+    Rialto's folder could bring one. A source run uses the checkout's helpers\\, which
+    tools-dev/fetch_helpers.py fills and checks. Either way a folder counts only when it holds the tool's
+    whole set (CARRIED_SETS), so a part of one never stands in for the real thing. A source checkout that
+    never ran fetch_helpers.py has none, and runs on installed tools as before.
+    """
+    pieces = [p for part in parts for p in re.split(r"[\\/]+", part) if p]
+    if not pieces:
+        return None
+    meipass = getattr(sys, "_MEIPASS", None)
+    bases = [meipass] if (getattr(sys, "frozen", False) or meipass) else [APP_ROOT]
+    for base in bases:
+        if not base:
+            continue
+        folder = os.path.join(base, "helpers", pieces[0])
+        whole = all(os.path.isfile(os.path.join(folder, *name.split("/")))
+                    for name in CARRIED_SETS.get(pieces[0], ()))
+        candidate = os.path.join(folder, *pieces[1:])
+        if whole and len(pieces) > 1 and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def carried_inno_compiler():
+    """The ISCC.exe Rialto carries, with everything it needs beside it, or None."""
+    return helper_path("inno", "ISCC.exe")
+
+
+def carried_mkisofs():
+    """The mkisofs.exe Rialto carries, or None. It needs cygwin1.dll beside it: without it, it prints nothing."""
+    found = helper_path("cdrtools", "mkisofs.exe")
+    if found and os.path.isfile(os.path.join(os.path.dirname(found), "cygwin1.dll")):
+        return found
+    return None
+
+
+def installer_compiler():
+    """(ISCC.exe, carried): Inno Setup on this PC first (find_inno_compiler), then the one Rialto carries."""
+    found = find_inno_compiler()
+    if found:
+        return found, False
+    carried = carried_inno_compiler()
+    return (carried, True) if carried else (None, False)
+
+
+def disc_image_tools(pressed):
+    """Every tool that can write the disc image, in the order Rialto tries them: [(kind, path, carried)].
+
+    mkisofs on PATH, then oscdimg (PATH or the Windows ADK), then the mkisofs Rialto carries. A pressed
+    disc takes mkisofs only: oscdimg is licensed for Microsoft-authorized content, as it prints itself.
+    Empty when there is none, and then only an unpressed build falls back to a ZIP.
+    """
+    mkisofs, oscdimg = find_iso_tools()
+    tools = []
+    if mkisofs:
+        tools.append(("mkisofs", mkisofs, False))
+    if oscdimg and not pressed:
+        tools.append(("oscdimg", oscdimg, False))
+    carried = carried_mkisofs()
+    if carried and not (mkisofs and os.path.normcase(os.path.abspath(mkisofs)) ==
+                        os.path.normcase(os.path.abspath(carried))):
+        tools.append(("mkisofs", carried, True))
+    return tools
+
+
+def tool_words(kind, path, carried):
+    """How the log names a tool: "the mkisofs that comes with Rialto", "your oscdimg (C:\\...)"."""
+    if carried:
+        if kind == "iscc":
+            return "the Inno Setup %s that comes with Rialto" % CARRIED_INNO_VERSION
+        return "the %s that comes with Rialto" % kind
+    if kind == "iscc":
+        return "your Inno Setup (%s)" % path
+    return "your %s (%s)" % (kind, path)
+
+
+def missing_tool_refusals(pressed, image_needed=True):
+    """What the preflight says when a tool cannot be found, installed or carried: a sentence each, or []."""
+    refusals = []
+    if not installer_compiler()[0]:
+        refusals.append("No installer compiler: Inno Setup is not on this PC and this copy of Rialto does not "
+                        "carry one. Download the full Rialto.exe again, or install Inno Setup 6 from "
+                        + INNO_SETUP_DOWNLOAD + ".")
+    if image_needed and not disc_image_tools(pressed):
+        if pressed:
+            refusals.append("Pressed disc: a plant's master is made with mkisofs (from cdrtools), and there is "
+                            "none on this PC or in this copy of Rialto. Download the full Rialto.exe again, "
+                            "put mkisofs on your PATH, or untick Pressed.")
+        else:
+            refusals.append("No disc image tool: there is no mkisofs or oscdimg on this PC and this copy of "
+                            "Rialto does not carry one. Download the full Rialto.exe again, or install the "
+                            "Windows ADK with Deployment Tools ticked.")
+    return refusals
+
+
+def mkisofs_reads_utf8(mkisofs):
+    """True for a Cygwin or MSYS build (cygwin1.dll or msys-2.0.dll beside it): it reads file names as UTF-8."""
+    folder = os.path.dirname(os.path.abspath(mkisofs))
+    return any(os.path.isfile(os.path.join(folder, dll)) for dll in ("cygwin1.dll", "msys-2.0.dll"))
+
+
+def mkisofs_graft(item, is_folder):
+    """One item of the disc root as a graft point: "menu/=menu" for a folder, "setup.exe=setup.exe" for a file.
+
+    Without graft points mkisofs puts a folder's contents at the disc root. "\\" and "=" are escaped as the
+    graft syntax asks, and a name that starts with "-" is written "/-name=./-name" so it is not an option.
+    """
+    escaped = item.replace("\\", "\\\\").replace("=", "\\=")
+    on_disc, local = escaped, escaped
+    if item.startswith("-"):
+        on_disc, local = "/" + escaped, "./" + escaped
+    return "%s%s=%s" % (on_disc, "/" if is_folder else "", local)
+
+
+# A Cygwin or MSYS mkisofs reads its own command line again once it starts: it drops single quotes,
+# expands {a,b}, * and [x], and reads a word that starts with @ as a file of words (security review,
+# 1.5.1). So no name from a game folder goes on that line. The graft points go in a file in the build
+# folder (-path-list), the image is written to a plain name there and renamed once it is finished, and the
+# label is made safe by mkisofs_label.
+MKISOFS_IMAGE_PART = "rialto-image.part"
+MKISOFS_PATH_LIST = "rialto-graft-points.txt"
+
+
+def mkisofs_label(disc_label):
+    """The disc label as mkisofs gets it: no quote, brace, star, ? or square bracket for Cygwin to act on.
+
+    A tilde too: Cygwin reads a label of "~" as the builder's home folder and would write their Windows
+    user name onto every copy of the disc.
+    """
+    cleaned = "".join("" if c in "'\"" else "_" if c in "{}*?[]\\~" else c for c in str(disc_label))
+    return cleaned.lstrip("-@ ").rstrip() or "GAME"
+
+
+def mkisofs_path_list(items, folders):
+    """The file -path-list reads: each item of the disc root as a graft point, one a line."""
+    return "".join(mkisofs_graft(item, item in folders) + "\n" for item in items)
+
+
+def mkisofs_command(mkisofs, disc_label, needs_udf, utf8_names=True):
+    """The one mkisofs command line, for one disc and for each disc of a set (1.5.1).
+
+    ISO 9660 with Joliet (names up to 103 characters, -joliet-long, as oscdimg keeps them) and Rock Ridge
+    (-r: readable by everyone on a Mac or Linux PC, not only by the Windows account that built it), each
+    item grafted where it belongs, and UDF for a file over 4 GiB. A Cygwin build reads names as UTF-8, so it
+    is told so, or "Café" and Japanese names come out garbled. Run with the build folder as the working
+    folder: the graft points are read from MKISOFS_PATH_LIST there (mkisofs_path_list writes it) and the
+    image goes to MKISOFS_IMAGE_PART there, so the command line holds no name from the game folder.
+    """
+    command = [mkisofs, "-o", MKISOFS_IMAGE_PART]
+    if utf8_names:
+        command += ["-input-charset", "UTF-8"]
+    command += ["-J", "-r", "-joliet-long", "-graft-points", "-V", mkisofs_label(disc_label)]
+    if needs_udf:
+        command += ["-udf", "-iso-level", "3"]
+    return command + ["-path-list", MKISOFS_PATH_LIST]
+
+
+def same_file_bytes(first, second):
+    """True when two files hold the same bytes."""
+    try:
+        if os.path.getsize(first) != os.path.getsize(second):
+            return False
+        with open(first, "rb") as a, open(second, "rb") as b:
+            while True:
+                block = a.read(1 << 20)
+                if block != b.read(1 << 20):
+                    return False
+                if not block:
+                    return True
+    except OSError:
+        return False
+
+
 # Helper: Safe path for Windows
 safe = lambda p: os.path.normpath(os.path.abspath(p))
 
@@ -429,12 +632,81 @@ def asset_path(filename):
 def ensure_structure():
     os.makedirs(INPUT_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Proved at every start: a read-only folder that already holds config.json (a 1.5.0 folder copied
+    # into Program Files) raised nothing here, and settings and builds then failed later, silently.
+    with tempfile.TemporaryFile(dir=APP_ROOT):
+        pass
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4)
 
 
+_QUIET_ALT_HOOKS = []  # every window procedure quiet_alt_tap made, kept for the life of the program
+
+
+def quiet_alt_tap(window, when=None):
+    """A bare Alt (or F10) on this window never puts it into Windows' menu mode (1.5.1, launch day).
+
+    Alt pressed and let go on its own sends the window SC_KEYMENU, and Windows then runs a modal menu
+    loop that waits for the next key or click. A build keeps the window answering from inside its own
+    loop (keep_window_alive), so it waited too: one stray Alt tap on the Build Queue stopped a build
+    until the next click. Here a bare Alt or F10 does nothing while `when()` is true (always, if no
+    `when` is given). Alt+Space still opens the window menu and Alt+letter still reaches a menu.
+
+    Hooked when the window is mapped, on the frame Windows draws around it (Tk can make a new frame,
+    so each one is hooked once). The hooks are never released: a window being destroyed still calls
+    its procedure, and freed code there would crash Rialto.
+    """
+    if sys.platform != "win32":
+        return
+
+    def hook(_event=None):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            frame = int(window.wm_frame(), 16)
+            if any(h[0] == frame and h[1] is window for h in _QUIET_ALT_HOOKS):
+                return
+            user32 = ctypes.windll.user32
+            lresult = ctypes.c_ssize_t
+            procedure = ctypes.WINFUNCTYPE(lresult, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+            user32.CallWindowProcW.restype = lresult
+            user32.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT,
+                                               wintypes.WPARAM, wintypes.LPARAM]
+            user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+            user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+            previous = [None]
+
+            def answer(hwnd, message, wparam, lparam):
+                # WM_SYSCOMMAND (0x0112) with SC_KEYMENU (0xF100) and no key: Alt or F10 alone.
+                if message == 0x0112 and (wparam & 0xFFF0) == 0xF100 and lparam == 0:
+                    try:
+                        if when is None or when():
+                            return 0
+                    except Exception:
+                        pass
+                return user32.CallWindowProcW(previous[0], hwnd, message, wparam, lparam)
+
+            callback = procedure(answer)
+            previous[0] = user32.SetWindowLongPtrW(frame, -4, ctypes.cast(callback, ctypes.c_void_p))  # GWLP_WNDPROC
+            if previous[0]:
+                _QUIET_ALT_HOOKS.append((frame, window, callback, previous))
+        except Exception:
+            pass  # a window that keeps Windows' own Alt behavior is no worse than before
+
+    try:
+        window.bind("<Map>", hook, add="+")
+        if window.winfo_ismapped():
+            hook()
+    except Exception:
+        pass
+
+
 class ToolTip:
+    # RialtoApp.tooltip_place once Rialto has started: where a tooltip goes by the one rule every window Rialto
+    # opens goes through (1.5.1, B13.4). None before that, and then a tooltip opens where it always did.
+    place = None
+
     def __init__(self, widget, text, bg=None, fg=None):
         self.widget = widget
         self.text = text
@@ -447,15 +719,17 @@ class ToolTip:
     def show(self, event=None):
         if self.tipwindow or not self.text:
             return
+        # Below and right of the pointer. `above` is the line its bottom edge goes on when there is no room below.
         if event:
             x = event.x_root + 15
             y = event.y_root + 10
+            above = event.y_root - 10
         else:
             x = self.widget.winfo_rootx() + 20
             y = self.widget.winfo_rooty() + 20
+            above = self.widget.winfo_rooty()
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
         tip_bg = self.bg or "#2d2d2d"
         tip_fg = self.fg or "#e0e0e0"
         label = tk.Label(tw, text=self.text, justify='left',
@@ -464,6 +738,16 @@ class ToolTip:
                          font=("Segoe UI", 10),
                          wraplength=320)
         label.pack(ipadx=4, ipady=2)
+        # A tooltip is a window too (1.5.1, B13.4): from the export bar's last row it opened under the taskbar,
+        # now that the main window ends at the work area's edge. Its size is the label's and the padding the
+        # label is packed with, which Tk knows before the window is laid out, so it is placed before it shows.
+        if ToolTip.place is not None:
+            try:
+                x, y = ToolTip.place(self.widget, label.winfo_reqwidth() + 8, label.winfo_reqheight() + 4,
+                                     x, y, above)
+            except Exception:
+                pass  # where it always opened is better than no tooltip
+        tw.wm_geometry(f"+{x}+{y}")
 
     def hide(self, event=None):
         tw = self.tipwindow
@@ -644,6 +928,11 @@ def ui_icon(name, color="#ffffff", size=16):
         poly([(0.72, 0.30), (0.72, 0.70), (0.98, 0.50)])
     elif name == "check":
         line([(0.16, 0.52), (0.42, 0.78), (0.86, 0.20)], width=int(s * 0.16))
+    elif name == "queue":
+        # Build Queue: three rows, each a disc and a bar, one after another
+        for y in (0.20, 0.50, 0.80):
+            circle(0.18, y, 0.11)
+            box(0.38, y - 0.075, 0.92, y + 0.075, radius=0.03)
     else:
         ring(0.50, 0.50, 0.40, 0.24)
 
@@ -859,6 +1148,387 @@ def split_launch_args(value, max_args=16, max_len=256):
     return [a[:max_len] for a in args if a][:max_args]
 
 
+# Windows 7 and 8 (1.5.1, B8). The disc menu is frozen with Python 3.12, which
+# needs Windows 8.1 (version 6.3): on anything older menu.exe stops at launch,
+# missing api-ms-win-core-path-l1-1-0.dll. Setup itself still allows Windows 7
+# (MinVersion=6.1), so the installer's shortcuts split by version: 8.1 and later
+# open the menu as before, Windows 7 and 8 start the game itself. A player there
+# loses the menu, not the game.
+MENU_MIN_WINDOWS = "6.3"
+
+
+def iss_relative_exe(rel):
+    """A game exe from menu_config.json as a path under {app}, or "".
+
+    Refused rather than stripped: a path with a character taken out points the
+    shortcut at a file that is not there. Only a plain relative path to an .exe
+    passes, with no drive, no leading separator and no dot-only component, and
+    none of the characters Inno would read as syntax.
+    """
+    rel = str(rel or "").replace("/", "\\").strip()
+    if (not rel or not rel.lower().endswith(".exe") or _ISS_META.search(rel)
+            or ":" in rel or rel.startswith("\\")):
+        return ""
+    if any(part.strip(". ") == "" for part in rel.split("\\")):
+        return ""
+    return rel
+
+
+def iss_parameters(args):
+    """Launch arguments as an Inno Parameters value, or "" if any cannot be written.
+
+    An argument holding a space is quoted for the game, and Inno wants a quote
+    inside a quoted value written twice. The whole set is refused if one
+    argument carries a character Inno would read as syntax, the same rule the
+    menu applies to the set (dropping one of "-mode opengl" changes the mode).
+    """
+    out = []
+    for arg in args if isinstance(args, list) else []:
+        if not isinstance(arg, str) or not arg or _ISS_META.search(arg):
+            return ""
+        out.append('""%s""' % arg if any(c.isspace() for c in arg) else arg)
+    return " ".join(out)
+
+
+def windows7_shortcut_lines(path_name, config, has_icon):
+    """[Icons] and [Run] lines that start the game itself on Windows 7 and 8.
+
+    `config` is the menu_config.json this build staged, so the shortcut starts
+    the exe the menu would have started: the configured list on a disc of
+    several games (one shortcut each), else game_exe. Each game starts in its
+    own folder, as the menu starts it, and compatibility mode gets one more
+    Start Menu shortcut carrying its arguments.
+
+    Returns (icons, runs). Both empty means no game could be named safely, and
+    the caller keeps the menu shortcuts on every Windows, as 1.5.0 did.
+    """
+    config = config if isinstance(config, dict) else {}
+    only = "; OnlyBelowVersion: %s" % MENU_MIN_WINDOWS
+    icon = '; IconFilename: "{app}\\game_icon.ico"' if has_icon else ""
+    games = [g for g in config.get("games") or [] if isinstance(g, dict)]
+    if len(games) > 1:
+        chosen = [(g.get("name"), iss_relative_exe(g.get("exe"))) for g in games]
+    else:
+        chosen = [(path_name, iss_relative_exe(games[0].get("exe") if games else config.get("game_exe")))]
+    chosen = [(name, exe) for name, exe in chosen if exe]
+    params = iss_parameters(config.get("compat_args")) if config.get("compat_mode") else ""
+    # A Start Menu shortcut for each game on every Windows (1.5.1, B9), when the
+    # author asked for it on a disc of several. Beside the menu's shortcut on
+    # 8.1 and later, so no game takes the disc's own name there.
+    everywhere = bool(config.get("start_menu_per_game")) and len(chosen) > 1
+
+    icons, runs = [], []
+    taken = {str(path_name).lower()} if everywhere else set()
+    for name, exe in chosen:
+        label = iss_value(name, os.path.splitext(os.path.basename(exe))[0], for_path=True)
+        base, n = label, 2
+        while label.lower() in taken:
+            label, n = "%s (%d)" % (base, n), n + 1
+        taken.add(label.lower())
+        folder = exe.rsplit("\\", 1)[0] if "\\" in exe else ""
+        target = 'Filename: "{app}\\%s"; WorkingDir: "{app}%s"' % (exe, "\\" + folder if folder else "")
+        icons.append('Name: "{group}\\%s"; %s%s%s' % (label, target, icon, "" if everywhere else only))
+        icons.append('Name: "{userdesktop}\\%s"; %s%s; Tasks: desktopicon%s' % (label, target, icon, only))
+        if params:
+            icons.append('Name: "{group}\\%s (Compatibility Mode)"; %s; Parameters: "%s"%s%s'
+                         % (label, target, params, icon, only))
+        # One game: the finish page's Launch box starts it. Several: no Launch
+        # box on these Windows, rather than one tick box per game.
+        if len(chosen) == 1:
+            runs.append('%s; Description: "{cm:LaunchProgram}"; Flags: nowait postinstall skipifsilent%s'
+                        % (target, only))
+    return icons, runs
+
+
+# Files the installer places for the player (1.5.1, B10): a mod's first-run
+# config, a pre-seeded save. Copying files only: running an author's script at
+# install time is a different question of trust, and nothing asked for it.
+# The places are the ones Inno resolves on any PC, for the user who installs
+# (Setup runs per-user unless the player chooses otherwise).
+PLACED_FILE_PLACES = (
+    ("Documents", "{userdocs}"),
+    ("Saved Games", "{usersavedgames}"),
+    ("AppData Roaming", "{userappdata}"),
+    ("AppData Local", "{localappdata}"),
+    ("AppData LocalLow", "{%USERPROFILE}\\AppData\\LocalLow"),
+    ("The install folder", "{app}"),
+)
+# Where a build stages them: beside the build folder, not in it. Everything in
+# the build folder is installed into {app}, and Inno's createallsubdirs makes
+# even an excluded folder there, empty, on the player's PC.
+PLACED_FILES_DIR = ".rialto-placed"
+
+
+# What a placed file may be, and where it may go (1.5.1 security review). A
+# profile is shared between authors and its rows land under a signed
+# installer, so: a source only from inside the game folder (never a share, so a
+# profile cannot bring its own content), and outside the install folder data
+# only, never in a folder Windows or Office starts things from.
+PLACED_REFUSED_EXTENSIONS = frozenset(
+    ".exe .dll .sys .drv .ocx .com .scr .pif .cpl .msi .msp .msc .bat .cmd .ps1 .psm1 .psd1 "
+    ".vbs .vbe .js .jse .wsf .wsh .hta .lnk .url .reg .inf .jar .py .pyw .chm .gadget "
+    ".application .appref-ms .library-ms .settingcontent-ms .xll .xla .xlam .dotm .wll "
+    ".scf .search-ms .website .diagcab .docm .xlsm .pptm .appx .appxbundle .msix .msixbundle "
+    ".vhd .vhdx .iso .img".split())
+PLACED_REFUSED_FOLDERS = frozenset(
+    ["startup", "start menu", "programs", "windowsapps", "windowspowershell", "powershell",
+     "xlstart", "templates", "sendto", "recent", "protocol handler"])
+
+
+def placed_row_problem(row, game_folder):
+    """Why a Files to Place row cannot be built, as a phrase, or "" when it can."""
+    source = str((row or {}).get("source") or "")
+    if source.startswith(("\\\\", "//")):
+        return "it is on a network share"
+    if not os.path.isabs(source):
+        return "it is not a full path"
+    if not game_folder:
+        return "there is no game folder"
+    real, base = os.path.realpath(source), os.path.realpath(game_folder)
+    try:
+        inside = os.path.commonpath([real, base]) == base and real != base
+    except ValueError:
+        inside = False
+    if not inside:
+        return "it is outside your game folder"
+    place = (row or {}).get("place")
+    if place not in dict(PLACED_FILE_PLACES):
+        return "its place is not one Rialto knows"
+    if place != "The install folder":
+        parts = [p.lower() for p in placed_subfolder((row or {}).get("subfolder")).split("\\") if p]
+        if (parts and parts[0] == "microsoft") or any(p in PLACED_REFUSED_FOLDERS for p in parts):
+            return "its sub-folder is one Windows starts programs from"
+        if os.path.isfile(source) and placed_file_refused(source):
+            return "a program, script or shortcut can only go in the install folder"
+    return ""
+
+
+def placed_file_refused(name):
+    """True for a file that runs or opens something: never placed outside the install folder."""
+    return os.path.splitext(str(name))[1].lower() in PLACED_REFUSED_EXTENSIONS
+
+
+def placed_files_root(output_path):
+    return os.path.join(os.path.dirname(os.path.abspath(output_path)), PLACED_FILES_DIR)
+
+
+def placed_subfolder(text):
+    """A typed sub-folder (MyStudio\\MyGame) made safe for DestDir: each part as a
+    folder name, so ".." and drive letters fall away rather than climb out."""
+    parts = re.split(r"[\\/]+", str(text or ""))
+    return "\\".join(p for p in (iss_value(part, "", for_path=True) for part in parts) if p)[:200]
+
+
+def placed_files_lines(staged):
+    """[Files] lines for the rows a build staged under ..\\.rialto-placed\\<n>\\.
+
+    `staged` is the manifest the staging step wrote: per row its number, the
+    file's name (empty for a folder), the place, the sub-folder and the two
+    choices. Never replacing a file already there is the default, so a
+    returning player's saves survive a reinstall, and the files outlive an
+    uninstall unless the author asked otherwise. A row with a place Rialto does
+    not know, or a name Inno would read as syntax, is left out.
+    """
+    places = dict(PLACED_FILE_PLACES)
+    lines = []
+    for row in staged if isinstance(staged, list) else []:
+        if not isinstance(row, dict) or row.get("place") not in places:
+            continue
+        try:
+            number = int(row.get("n"))
+        except (TypeError, ValueError):
+            continue
+        name = str(row.get("name") or "")
+        if name and (_ISS_META.search(name) or name != os.path.basename(name) or name.strip(". ") == ""):
+            continue
+        sub = placed_subfolder(row.get("subfolder"))
+        if row["place"] != "The install folder":
+            parts = [p.lower() for p in sub.split("\\") if p]
+            if ((parts and parts[0] == "microsoft") or any(p in PLACED_REFUSED_FOLDERS for p in parts)
+                    or (name and placed_file_refused(name))):
+                continue
+        dest = places[row["place"]] + ("\\" + sub if sub else "")
+        flags = ["ignoreversion"]
+        if not name:
+            flags += ["recursesubdirs", "createallsubdirs"]
+        if row.get("keep", True):
+            flags.append("onlyifdoesntexist")
+        if not row.get("remove", False):
+            flags.append("uninsneveruninstall")
+        flags.append("skipifsourcedoesntexist")
+        lines.append('Source: "..\\%s\\%d\\%s"; DestDir: "%s"; Flags: %s'
+                     % (PLACED_FILES_DIR, number, name or "*", dest, " ".join(flags)))
+    return lines
+
+
+# How hard the installer squeezes the game (1.5.1, B7). Balanced is 1.5.0's
+# installer exactly, and what a profile without the key gets. Solid
+# compression stays off in every choice: Setup would have to unpack
+# everything before a file to reach it, and a multi-disc install that hits an
+# error would ask for Disc 1 again.
+COMPRESSION_CHOICES = (
+    ("Balanced", "lzma2/fast"),
+    ("Smallest disc", "lzma2/max"),
+    ("Fastest install", "none"),
+)
+
+
+def compression_setting(choice):
+    return dict(COMPRESSION_CHOICES).get(choice, "lzma2/fast")
+
+
+# Pressed discs (1.5.1, B5): a disc a factory presses rather than one the
+# author burns. Every copy of a build is the same image and nothing on a
+# Rialto disc checks the media, so a pressed copy behaves like a burned one;
+# what changes is what goes to the plant. CD and DVD only for now: pressed
+# Blu-ray waits on two plants confirming a data BD-ROM without AACS, and on the
+# first UDF 2.50 image a machine has read.
+#
+# The 8 cm minis (1.5.1, minis) press as an 8 cm CD-ROM and an 8 cm DVD-5. The
+# DVD Forum's own name for the 8 cm single-layer disc is DVD-1, so the sheet
+# says both. Neither has a second layer, so no layer break applies.
+PRESSED_DISC_TYPES = {"Mini CD 210 MB (8 cm)": "CD-ROM, 8 cm", "CD 700 MB": "CD-ROM",
+                      "Mini DVD 1.4 GB (8 cm)": "DVD-5, 8 cm (DVD-1)", "DVD 4.7 GB": "DVD-5",
+                      "DVD DL 8.5 GB": "DVD-9"}
+# The two 8 cm Target Media choices, by the names MEDIA_TYPES gives them.
+MINI_DISC_MEDIA = ("Mini CD 210 MB (8 cm)", "Mini DVD 1.4 GB (8 cm)")
+# A 24-minute 8 cm CD: 24 x 60 x 75 sectors, the 80-minute CD's density on the
+# smaller disc. A pressed 8 cm CD-ROM is held to the same.
+MINI_CD_SECTORS = 108_000
+# An 8 cm single-layer DVD, a little under the 712,891 sectors of the smaller
+# blank (DVD-R 2.0; DVD+R 1.2 gives 714,544). Sources beside MEDIA_TYPES.
+MINI_DVD5_SECTORS = 712_800
+SECTOR_BYTES = 2048
+# Layer 0 of a DVD-9: a multiple of 16 inside the 2,085,000 sectors Sonopress
+# gives a layer. Layer 1 takes the rest, so it is never the bigger of the two.
+DVD9_LAYER0_SECTORS = 2_084_992
+DVD9_LAYER_LIMIT = 2_085_000
+# A single-layer DVD, a little under its 2,295,104 sectors.
+DVD5_SECTORS = 2_295_000
+
+
+def pressed_refusal(media):
+    """Why a pressed disc cannot be this Target Media, or "" when it can."""
+    media = str(media or "")
+    if media in PRESSED_DISC_TYPES:
+        return ""
+    if media.startswith("Auto"):
+        return "a plant presses a named size. Pick CD, DVD or DVD DL under Target Media."
+    if media.startswith("M-DISC") or "128 GB" in media:
+        return "%s only exists as a blank disc to burn, so there is nothing to press." % media
+    if media in ("Blu-ray 25 GB", "Blu-ray DL 50 GB"):
+        return ("pressed Blu-ray is not ready yet. It waits on plants confirming they press a data "
+                "Blu-ray without copy protection. Build it unpressed for now, or pick a DVD.")
+    if "XL" in media:
+        return "no plant has confirmed pressing a %s as a data disc yet." % media
+    return "pick CD, DVD or DVD DL under Target Media."
+
+
+def dvd9_layers(sectors):
+    """(Layer 0, Layer 1) sectors for a DVD-9 image, or None if it cannot be one."""
+    sectors = int(sectors)
+    if sectors <= 0 or sectors > 2 * DVD9_LAYER0_SECTORS:
+        return None
+    layer0 = min(sectors, DVD9_LAYER0_SECTORS)
+    return layer0, sectors - layer0
+
+
+def iso_facts(path):
+    """(volume label, has UDF) read from a disc image's own descriptors."""
+    label, udf = "", False
+    try:
+        with open(path, "rb") as f:
+            f.seek(16 * SECTOR_BYTES)
+            head = f.read(24 * SECTOR_BYTES)
+    except OSError:
+        return label, udf
+    if head[1:6] == b"CD001":
+        label = head[40:72].decode("ascii", "replace").strip()
+    udf = any(head[i + 1:i + 5] in (b"NSR0",) for i in range(0, len(head), SECTOR_BYTES))
+    return label, udf
+
+
+def file_md5(path, chunk=8 * 1024 * 1024, progress=None):
+    """The file's MD5. `progress`, if given, is called with each block's size."""
+    import hashlib
+    digest = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            digest.update(block)
+            if progress:
+                progress(len(block))
+    return digest.hexdigest()
+
+
+def checksum_text(discs):
+    """Chksum.md5: one "hash *filename" line per image, the form Sonopress names."""
+    return "".join("%s *%s\n" % (disc["md5"], disc["file"]) for disc in discs)
+
+
+def master_sheet_text(title, developer, version, built_on, discs, signed):
+    """The plain-text sheet that goes to the plant with the images."""
+    lines = ["%s: master sheet" % title, "",
+             "For the pressing plant. Made with Rialto %s on %s." % (version, built_on), "",
+             "Title:       %s" % title,
+             "Developer:   %s" % developer,
+             "Discs:       %d" % len(discs), ""]
+    for number, disc in enumerate(discs, start=1):
+        sectors = disc["bytes"] // SECTOR_BYTES
+        lines += ["Disc %d of %d" % (number, len(discs)),
+                  "  File:          %s" % disc["file"],
+                  "  Bytes:         {:,}".format(disc["bytes"]),
+                  "  Sectors:       {:,} of 2,048 bytes".format(sectors),
+                  "  MD5:           %s" % disc["md5"],
+                  "  Volume label:  %s" % (disc["label"] or "(none)"),
+                  "  Disc type:     %s" % disc["type"],
+                  "  File system:   %s" % ("ISO 9660 level 3, Joliet, Rock Ridge and UDF" if disc["udf"]
+                                           else "ISO 9660, Joliet and Rock Ridge")]
+        if disc["type"] == "DVD-9":
+            layers = dvd9_layers(sectors)
+            if layers:
+                lines.append("  Layer break:   Layer 0 {:,} sectors, Layer 1 {:,} sectors "
+                             "(Layer 0 ends with sector {:,})".format(layers[0], layers[1], layers[0] - 1))
+            if sectors <= DVD5_SECTORS:
+                lines.append("  Note:          this image fits on one layer. A DVD-5 presses cheaper.")
+        if disc["bytes"] % SECTOR_BYTES:
+            lines.append("  Warning:       not a whole number of sectors. Rebuild before sending.")
+        lines.append("")
+    lines += ["setup.exe signed:  %s" % signed.get("setup.exe", "not checked"),
+              "menu.exe signed:   %s" % signed.get("menu.exe", "not checked"), "",
+              "A data disc: a PC game installer, no video. No copy protection is requested.",
+              "The checksums are also in Chksum.md5, beside the images.", ""]
+    return "\n".join(lines)
+
+
+def progress_text(step, fraction=None, seconds=0.0, detail=""):
+    """The build's live line (1.5.1, B6): the step, how far, and the time so far.
+
+    "Compressing the installer: 812 of 3,140 files, 41%, 6 min 12 s". A step
+    that cannot say how far still counts its seconds, so the line never stands
+    still.
+    """
+    minutes, secs = divmod(int(max(seconds, 0)), 60)
+    clock = "%d min %d s" % (minutes, secs) if minutes else "%d s" % secs
+    parts = [detail] if detail else []
+    if fraction is not None:
+        parts.append("%d%%" % int(max(0.0, min(fraction, 1.0)) * 100))
+    parts.append(clock)
+    return "%s: %s" % (step, ", ".join(parts))
+
+
+def iscc_compressing_path(line):
+    """The file an ISCC "   Compressing: <path>" line names, or None.
+
+    Taken from what ISCC 6.5.4 printed compiling a real Rialto script: one such
+    line per file, after "Compressing Setup program executable" (no colon).
+    """
+    text = str(line or "").strip()
+    if not text.startswith("Compressing: "):
+        return None
+    # A file with version info ends "   (3.12.10150.1013)", seen from ISCC 6.
+    return re.sub(r"\s+\([\d.]+\)$", "", text[len("Compressing: "):]).strip() or None
+
+
 def sanitize_profile_data(data):
     """Walk a loaded profile JSON and sanitize every string value."""
     if isinstance(data, str):
@@ -912,6 +1582,109 @@ def oversized_disc_warnings(disc_sizes, budget, media_label):
     return lines
 
 
+def spanned_disc_count(base, payload, capacity, reserve, margin):
+    """How many discs a build makes, worked out the way the build makes them (1.5.1, minis).
+
+    base is what rides on Disc 1 beside the installer (the menu, setup.exe, the
+    art); payload is what goes into the installer. One disc when both fit the
+    media less margin, as create_iso decides. Otherwise Inno cuts the payload
+    into slices of the media less reserve (get_disk_slice_size), and they are
+    packed in order as create_spanned_isos packs them, Disc 1 starting with the
+    base. Pure, so the disc meter and the harness use the same sum.
+    """
+    base, payload = max(int(base), 0), max(int(payload), 0)
+    fit = capacity - margin
+    if base + payload <= fit:
+        return 1
+    slice_size = max(262_144, min(capacity - reserve, 2_100_000_000))
+    parts = [slice_size] * (payload // slice_size)
+    if payload % slice_size:
+        parts.append(payload % slice_size)
+    discs, held = 1, base
+    for part in parts:
+        # Every disc holds something when the next part comes: Disc 1 its base,
+        # a later disc the part that opened it. So a part never opens two.
+        if held + part > fit:
+            discs, held = discs + 1, 0
+        held += part
+    return discs
+
+
+_MONITOR_CALLS = None  # (user32, MONITORINFO): made by monitor_calls the first time it is asked, and kept
+
+
+def monitor_calls():
+    """Windows' calls for asking about a monitor, declared once: (user32, MONITORINFO).
+
+    ctypes keeps every structure class, and every pointer type made from one,
+    for the life of the process. Declared inside work_area_of_monitor they were
+    made again, and kept, each time a window opened. Raises if Windows cannot
+    be asked; work_area_of_monitor answers None for that.
+    """
+    global _MONITOR_CALLS
+    if _MONITOR_CALLS is None:
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        # Its own handle on user32, so declaring these calls changes nothing for the rest of Rialto.
+        user32 = ctypes.WinDLL("user32")
+        user32.MonitorFromRect.argtypes = [ctypes.POINTER(wintypes.RECT), wintypes.DWORD]
+        user32.MonitorFromRect.restype = wintypes.HMONITOR
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+        user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
+        _MONITOR_CALLS = (user32, MONITORINFO)
+    return _MONITOR_CALLS
+
+
+def work_area_of_monitor(box=None):
+    """One monitor's work area, the screen less the taskbar, as (left, top, width, height). None if Windows will not say.
+
+    `box` is a window's place as (left, top, width, height): the monitor
+    holding most of it is meant, or the nearest. With no box it is the monitor
+    the pointer is on, for a window that has no place yet.
+    Asked of Windows itself (1.5.1, B13.1), because Tk knows only the whole of
+    the main screen: not the taskbar, not a second monitor, not a corner that
+    is not 0, 0. Never raises: the caller falls back to Tk's measure of the
+    screen, less an allowance for a taskbar it cannot see (available_space).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32, MONITORINFO = monitor_calls()
+
+        if box is not None:
+            left, top, width, height = (int(n) for n in box)
+            rect = wintypes.RECT(left, top, left + width, top + height)
+            monitor = user32.MonitorFromRect(ctypes.byref(rect), 2)  # MONITOR_DEFAULTTONEAREST
+        else:
+            point = wintypes.POINT(0, 0)
+            user32.GetCursorPos(ctypes.byref(point))
+            monitor = user32.MonitorFromPoint(point, 1)  # MONITOR_DEFAULTTOPRIMARY
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            work = info.rcWork
+        else:
+            work = wintypes.RECT()  # the main monitor's, when the one meant cannot be asked
+            if not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work), 0):  # SPI_GETWORKAREA
+                return None
+        width, height = work.right - work.left, work.bottom - work.top
+        if width <= 0 or height <= 0:
+            return None
+        return work.left, work.top, width, height
+    except Exception:
+        return None
+
+
 # GUI class begins
 class RialtoApp:
     def __init__(self, root):
@@ -919,7 +1692,7 @@ class RialtoApp:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
-        self.root.title(f"{APP_NAME} 1.5 - Disc Builder")
+        self.root.title(f"{APP_NAME} {__version__} - Disc Builder")
         
         # Set favicon for main window
         try:
@@ -934,11 +1707,11 @@ class RialtoApp:
 
         self.root.overrideredirect(True)  # Hide native title bar
 
-        # Fit the window to the screen: tall screens get the full layout,
-        # 1080p screens get a slightly compressed one instead of clipping
-        screen_height = self.root.winfo_screenheight()
-        window_height = min(1200, max(900, screen_height - 80))
-        self.root.geometry(f"700x{window_height}")
+        # Fit the window to the screen (1.5.1, B13.1): 700 wide and as tall as the work area of the monitor
+        # Rialto opens on allows, up to 1200, centred in that work area. No floor: at 900 lines the window
+        # was taller than a 1080p laptop's screen at 125 percent, and Windows chose where it went.
+        self.window_height = self.place_window(self.root, 700, 1200)[1]
+        ToolTip.place = self.tooltip_place  # tooltips are windows too, and take their place from the same rule
         self.current_game_path = None
 
         default_font = ("Segoe UI", 10)
@@ -989,10 +1762,21 @@ class RialtoApp:
 
         # Multi-game disc support: list of {"name": display name, "exe": path
         # relative to the game folder}. Empty list = classic auto-detect.
+        # 1.5.1 (B9): an entry may also carry "icon" (a picture inside the game
+        # folder) and "blurb" (one line for the Play page).
         self.game_executables = []
+        # A Start Menu shortcut for each game as well as the menu's (B9). Off.
+        self.game_shortcuts = False
+        # Files the installer places on the player's PC (B10): rows of
+        # {"source", "place", "subfolder", "keep", "remove"}.
+        self.placed_files = []
 
         # Disc target and extras (Rialto 1.5)
         self.target_media_var = tk.StringVar(value="Auto (single disc)")
+        # Beside Target Media (1.5.1): how hard the installer squeezes (B7),
+        # and a disc a plant will press (B5).
+        self.compression_var = tk.StringVar(value="Balanced")
+        self.pressed_disc_var = tk.BooleanVar(value=False)
         self.usb_export_var = tk.BooleanVar(value=False)
         self.steam_button_var = tk.BooleanVar(value=True)
         self.mod_launcher_var = tk.BooleanVar(value=False)
@@ -1024,15 +1808,129 @@ class RialtoApp:
         # Icon images are held here so Tk cannot garbage-collect them
         self._button_icons = {}
         self.create_widgets()
+        self.say_missing_tools()
         self.load_last_session()
         self.load_config()
         self.load_last_used_profile()
+        self.root.after_idle(self.fit_main_window)
 
 
 
 
 
 
+
+    # A harness's pretended monitor (1.5.1, B13.5), as {"screen": (left, top, width, height), "work_area": (...)}.
+    # None on every real run, and then Windows is asked for the real work area.
+    PRETEND_MONITOR = None
+
+    def available_space(self, window=None):
+        """The space a window may be given, as (left, top, width, height): the one place the sizing code asks.
+
+        It is the work area, the screen less the taskbar, of the monitor
+        `window` is on. The main window is on one by the time it is sized
+        (setting its icon shows it, where Windows chose), so Rialto opens on
+        the monitor Windows picked for it and in the place Rialto picks. A
+        window with no place yet is measured on the monitor the pointer is on.
+        The corner is not always 0, 0 (a taskbar along the top or the left, a
+        monitor left of the main one). If Windows will not say, it is the
+        main screen as Tk measures it less 80 lines of height: Tk cannot see
+        the taskbar, and 80 lines is the allowance 1.5.0 made for it on every
+        screen. The whole screen would let a window run under the taskbar.
+        tools-dev/test_fits_every_screen.py sets PRETEND_MONITOR to answer for
+        a screen this PC does not have.
+        """
+        pretend = self.PRETEND_MONITOR
+        if pretend is not None:
+            return tuple(pretend["work_area"])
+        window = window or self.root
+        box = None
+        try:
+            if window.winfo_width() > 1 and window.winfo_height() > 1:
+                box = (window.winfo_rootx(), window.winfo_rooty(), window.winfo_width(), window.winfo_height())
+        except tk.TclError:
+            pass
+        return work_area_of_monitor(box) or (0, 0, window.winfo_screenwidth(), window.winfo_screenheight() - 80)
+
+    def window_frame(self):
+        """What Windows adds round a titled window, in lines: (title bar, border seen, border unseen).
+
+        A dialog's size in Tk is what it holds. Windows puts the title bar above
+        that and a border round it, and since Windows 10 all but one line of the
+        border is there to be taken hold of, not seen. The unseen part may hang
+        over the edge of the work area; the title bar and the line that shows
+        may not.
+        """
+        try:
+            import ctypes
+            metric = ctypes.windll.user32.GetSystemMetrics
+            border = metric(33) + metric(92)  # SM_CYSIZEFRAME + SM_CXPADDEDBORDER
+            title = metric(4) + border        # SM_CYCAPTION, and the border above it
+            if border <= 0 or title <= border:
+                raise OSError("Windows gave no frame metrics")
+            seen = 1 if sys.getwindowsversion().major >= 10 else border
+            return title, seen, border - seen
+        except Exception:
+            return 31, 1, 7  # Windows 10 and 11 at 100 percent
+
+    def fit_in_work_area(self, width, height, space, frame=(0, 0, 0), x=None, y=None, over=None):
+        """The one rule for every window Rialto opens (1.5.1, B13): never larger than the work area, and wholly inside it.
+
+        `width` and `height` are what the window holds. `space` is the work
+        area from available_space. `frame` is what Windows adds round a titled
+        window, from window_frame; a window with no title bar has none. With
+        `over`, the box of another window, it goes in the middle of that box a
+        third of the way down; with no `x` and `y` either, in the middle of the
+        work area. Returns (width, height, x, y) for Tk's geometry. Arithmetic
+        only: no window is touched.
+        """
+        left, top, area_w, area_h = (int(n) for n in space)
+        title, seen, unseen = frame
+        width = max(1, min(int(width), area_w - 2 * seen))
+        height = max(1, min(int(height), area_h - title - seen))
+        outer_w, outer_h = width + 2 * seen, height + title + seen
+        if over is not None:
+            over_x, over_y, over_w, over_h = over
+            x = over_x + (over_w - width) // 2
+            y = over_y + (over_h - height) // 3  # a third down reads better than dead centre
+        if x is None:
+            x = left + (area_w - outer_w) // 2 - unseen
+        if y is None:
+            y = top + (area_h - outer_h) // 2
+        # Tk places a titled window by the corner of its unseen border.
+        x = max(left - unseen, min(int(x), left + area_w - outer_w - unseen))
+        y = max(top, min(int(y), top + area_h - outer_h))
+        return width, height, x, y
+
+    def place_window(self, window, width, height, x=None, y=None, over=None, near=None):
+        """Give `window` its size and its place by the one rule (fit_in_work_area). Returns what it was given.
+
+        `near` is the window whose monitor is meant; with none it is Rialto's
+        own. Every window Rialto opens comes through here: the main window,
+        each dialog (centre_on), its message box and the Restore popup. A
+        tooltip keeps the size of its words and takes its place from the same
+        rule, through tooltip_place.
+        """
+        frame = (0, 0, 0) if window.wm_overrideredirect() else self.window_frame()
+        width, height, x, y = self.fit_in_work_area(
+            width, height, self.available_space(near), frame, x, y, over)
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        return width, height, x, y
+
+    def tooltip_place(self, widget, width, height, x, y, above):
+        """Where a tooltip goes, by the one rule: (x, y), wholly inside the work area of the monitor its widget is on.
+
+        `x`, `y` is where it opens when there is room: below and right of the
+        pointer, as it always did. Where that would cross the bottom of the
+        work area it opens above the pointer instead, its bottom edge on the
+        line `above`. Brought up by the rule alone it would open under the
+        pointer, take the pointer from its widget and close itself, over and
+        over. The rule then keeps it off the other three edges.
+        """
+        space = self.available_space(widget.winfo_toplevel())
+        if y + height > space[1] + space[3]:
+            y = above - height
+        return self.fit_in_work_area(width, height, space, x=x, y=y)[2:]
 
     def active_parent(self):
         """The window a new dialog should sit on top of.
@@ -1051,37 +1949,27 @@ class RialtoApp:
         return self.root
 
     def centre_on(self, window, width, height, parent=None):
-        """Put `window` in the middle of `parent`, kept on screen.
+        """Put `window` in the middle of `parent`, inside the work area of the monitor the parent is on.
 
         Two things went wrong before. Geometry was read before Tk had laid the
         parent out, so winfo_x/winfo_width answered 1 and 200 and the popup
         landed in the top-left corner of the monitor rather than over Rialto.
         And nothing clamped the result, so a Rialto window near the edge of a
-        screen could put its own dialog half off it.
+        screen could put its own dialog half off it. Since 1.5.1 (B13.4) the
+        size and the place both go through the one rule in place_window: no
+        dialog is larger than the work area, and none hangs under the taskbar.
+        Returns the (width, height) the window was given.
         """
         parent = parent or self.active_parent()
         try:
             parent.update_idletasks()
-            px, py = parent.winfo_rootx(), parent.winfo_rooty()
-            pw, ph = parent.winfo_width(), parent.winfo_height()
-            if pw <= 1 or ph <= 1:  # not laid out yet: fall back to the screen
-                px = py = 0
-                pw, ph = parent.winfo_screenwidth(), parent.winfo_screenheight()
-
-            x = px + (pw - width) // 2
-            y = py + (ph - height) // 3  # a third down reads better than dead centre
-
-            # Keep it on the monitor the parent is on, near enough.
-            screen_w = parent.winfo_screenwidth()
-            screen_h = parent.winfo_screenheight()
-            left_limit = min(px, 0)
-            right_limit = max(px + pw, screen_w) - width
-            x = max(left_limit, min(x, right_limit))
-            y = max(0, min(y, max(py + ph, screen_h) - height))
-
-            window.geometry(f"{width}x{height}+{int(x)}+{int(y)}")
+            over = (parent.winfo_rootx(), parent.winfo_rooty(), parent.winfo_width(), parent.winfo_height())
+            if over[2] <= 1 or over[3] <= 1:  # not laid out yet: the middle of the work area
+                over = self.available_space(parent)
+            return self.place_window(window, width, height, over=over, near=parent)[:2]
         except tk.TclError:
-            window.geometry(f"{width}x{height}")
+            window.geometry(f"{int(width)}x{int(height)}")
+            return int(width), int(height)
 
     def darken_title_bar(self, window):
         """Ask Windows to draw this window's own title bar dark, in dark mode.
@@ -1107,6 +1995,251 @@ class RialtoApp:
         except Exception:
             pass  # cosmetic only, and older Windows simply has no such thing
 
+    # Disc Extras' two columns (1.5.1, B11): wide enough for both at 1366 by 768, the smallest screen it is tested on.
+    DISC_EXTRAS_WIDTH = 1180
+
+    def dialog_height_for(self, requested, work_area_height, title_bar=32):
+        """How tall a dialog may be: what it holds (200 at least), never more than the work area less its title bar.
+
+        `title_bar` is every line Windows adds above and below what the dialog
+        holds: 32 on Windows 10 and 11 at 100 percent. Before 1.5.1 (B13.4) the
+        limit was the whole screen less 80, which let a dialog run under the
+        taskbar on a short screen.
+        """
+        return max(1, min(max(200, int(requested)), int(work_area_height) - int(title_bar)))
+
+    def fold_tutorial(self, folded):
+        """Fold the three-steps card to its title line, or open it again."""
+        if folded:
+            self.tutorial_more.pack_forget()
+            self.tutorial_toggle.configure(text="Show")
+        else:
+            self.tutorial_more.pack(fill="x")
+            self.tutorial_toggle.configure(text="Hide")
+
+    def fit_main_window(self):
+        """Keep Step 4 and the log in view on every screen (1.5.1).
+
+        The window is 700 wide and as tall as the work area allows, up to 1200,
+        never resized. At 1080p 1.5.0's page asked for more than its window
+        held, so the Disc Icon row and the whole log sat under the build bar.
+        The three-steps card starts folded to its title on every screen, with
+        Show beside it to open it again (his word, 19 Oct 2026: the fold short
+        screens had, everywhere; create_widgets). Where the folded page is
+        still more than the window holds (1005 lines, and a 1080p laptop at
+        125 percent has 816), the same page is laid out in fewer lines:
+        tighten_to_fit.
+        """
+        try:
+            self.root.update_idletasks()
+            short = self.root.winfo_reqheight() > getattr(self, "window_height", 10 ** 6)
+        except tk.TclError:
+            return
+        if short:
+            self.tighten_to_fit()
+
+    # The tighter page (1.5.1, B13.2, a candidate): how far each level draws the page in, for a window that cannot
+    # hold the folded page. "gap" is the space under each part of the page; "row" the space above and below each
+    # row inside a step; "log" the lines of log the page asks for (the log still takes whatever is to spare);
+    # "bar" the export bar's own spaces (above its first row, above the build row, above the tick boxes, under
+    # them); "button" what the build row's buttons add above and below their words. The page as it always was:
+    # gap 8, row 4 (6 in Step 1), log 4, bar 8, 10, 8 and 12, button 6. No text is made smaller at any level.
+    PAGE_LEVELS = (
+        {"gap": 4, "row": 2, "log": 4, "bar": (6, 8, 6, 8), "button": 6},  # 1: and Step 2's fields two to a row
+        {"gap": 4, "row": 1, "log": 3, "bar": (6, 8, 6, 8), "button": 6},  # 2: and Step 4's logos and icons paired
+        {"gap": 2, "row": 1, "log": 2, "bar": (4, 6, 4, 5), "button": 3},  # 3: drawn in as far as it still reads
+    )
+    page_level = 0  # how far this page was drawn in as Rialto opened: 0 is the page as it always was
+
+    def tighten_to_fit(self):
+        """Lay the page out in fewer lines, a level at a time, until the window holds it (1.5.1, B13.2).
+
+        The window stays tall and 700 wide, nothing scrolls and nothing is
+        taken off the page: the same widgets, read through the same variables,
+        in the same order of steps. Chosen once, as Rialto opens, by laying a
+        level out and asking Tk what the page then asks for, not from a list of
+        screens. Measured at 96 DPI, card folded: the page as it always was
+        asks 1005 lines; level 1 asks 810 (a 1080p laptop at 125 percent has
+        816), level 2 asks 703 (1366 x 768 has 720) and level 3 asks 655
+        (1080p at 150 percent has 672). A window that holds the folded page is
+        never touched, so a tall screen and 1080p at 100 percent are as they
+        were. Under 655 lines the page is cut as it always was, the log first,
+        and one line in the log says so.
+        """
+        try:
+            for level in range(1, len(self.PAGE_LEVELS) + 1):
+                self.root.update_idletasks()
+                if self.root.winfo_reqheight() <= self.window_height:
+                    return
+                self.tighten_page(level)
+                self.page_level = level
+            self.root.update_idletasks()
+            asks = self.root.winfo_reqheight()
+        except Exception as e:
+            # Every widget is still Rialto's own and still read as before; only where it sits may be half done.
+            self.update_status("⚠️ Rialto's page could not be laid out tighter for this screen (%s)." % e)
+            return
+        if asks > self.window_height:
+            self.update_status("⚠️ Rialto's page does not fit this screen: it is %d pixels tall with room for %d, "
+                               "so the log and then the last rows of Step 4 are cut off. If Windows' display "
+                               "Scale is above 100%%, lowering it makes room (Settings > System > Display)."
+                               % (asks, self.window_height))
+
+    def tighten_page(self, level):
+        """Draw the page in to `level` (1, 2 or 3) from the level before it: only where the widgets sit changes."""
+        tight = self.PAGE_LEVELS[level - 1]
+        gap = tight["gap"]
+        self.page_frame.pack_configure(pady=(gap, 0))
+        for part in (self.tutorial_box, self.quick_row, self.step_frame, self.meta_frame, self.disc_frame,
+                     self.art_frame):
+            part.pack_configure(pady=(0, gap))
+        self.status_text.configure(height=tight["log"])
+        self.status_text.pack_configure(pady=(2, gap))
+        if level == 1:
+            self.pair_metadata_rows()
+        elif level == 2:
+            self.pair_artwork_rows()
+        for step in (self.step_frame, self.meta_frame, self.disc_frame, self.art_frame):
+            for row in step.winfo_children():  # every child of a step is one of its rows
+                tighten = row.grid_configure if row.winfo_manager() == "grid" else row.pack_configure
+                tighten(pady=tight["row"])
+        above, build, ticks, under = tight["bar"]
+        self.export_inner.pack_configure(pady=(above, under))
+        self.export_action_row.pack_configure(pady=(build, 0))
+        self.export_check_row.pack_configure(pady=(ticks, 0))
+        for button in self.export_action_row.pack_slaves():
+            button.pack_configure(ipady=tight["button"])
+
+    def align_row_labels(self, rows):
+        """Make the labels of these rows as wide as the widest of them needs, so their boxes start on one line.
+
+        Each row is a label, then its box. On the full page every label is 20
+        characters wide, the room one field to a row had. Returns that width.
+        """
+        labels = [row.pack_slaves()[0] for row in rows]
+        for label in labels:
+            label.configure(width=0)  # as wide as its own words
+        widest = max(label.winfo_reqwidth() for label in labels)
+        for label in labels:
+            label.pack_configure(padx=(0, 4 + widest - label.winfo_reqwidth()))
+        return widest
+
+    def pair_metadata_rows(self):
+        """Step 2 in two columns: what a person types on the left, what fills itself in from it on the right.
+
+        Game Title, Developer and Publisher down the left; Start Menu Name,
+        Copyright Text and Disc Name down the right, each beside the field it
+        fills in from. Six rows become three. Tab still goes through them in
+        the order they always had. The left column is as wide as its longest
+        hint needs ("Who made it: you, your studio, or your team"), and the
+        right has the rest.
+        """
+        fields = self.meta_frame.pack_slaves()
+        for field in fields:
+            field.pack_forget()
+        for index, field in enumerate(fields):
+            field.grid(row=index % 3, column=index // 3, sticky="ew", padx=4)
+        typed, filled = fields[:3], fields[3:]
+        label_width = self.align_row_labels(typed)
+        self.align_row_labels(filled)
+        # A hint is a label inside its box, 7 across from the box's edge, whether or not it is showing now.
+        boxes = [field.pack_slaves()[1] for field in typed]
+        hints = [hint.winfo_reqwidth() for box in boxes for hint in box.winfo_children()]
+        box_width = max([box.winfo_reqwidth() for box in boxes] + [7 + width + 3 for width in hints])
+        # The column: the field's own 4 either side, its label and the 4 after it, the box's 4 either side, the box.
+        self.meta_frame.grid_columnconfigure(0, minsize=8 + label_width + 4 + 8 + box_width)
+        self.meta_frame.grid_columnconfigure(1, weight=1)
+
+    def pair_artwork_rows(self):
+        """Step 4 in three rows: Menu Background across the top, the two logos side by side, then the two icons.
+
+        Five rows become three, read left to right in the order they always
+        had. A box beside another is narrow for a whole path, so it keeps the
+        end of its path in view (show_path_end).
+        """
+        background, game_logo, company_logo, game_icon, disc_icon = fields = self.art_frame.pack_slaves()
+        for field in fields:
+            field.pack_forget()
+        background.grid(row=0, column=0, columnspan=2, sticky="ew", padx=4)
+        for index, field in enumerate(fields[1:]):
+            field.grid(row=1 + index // 2, column=index % 2, sticky="ew", padx=4)
+        self.align_row_labels([background, game_logo, game_icon])
+        self.align_row_labels([company_logo, disc_icon])
+        paths = (self.logo_path_var, self.company_logo_var, self.ico_path_var, self.disc_icon_var)
+        for field, path in zip(fields[1:], paths):
+            box = field.pack_slaves()[1]
+            box.configure(width=8)  # asks for little and is given what the row has, so Browse keeps its whole width
+            self.show_path_end(box, path)
+        # Both columns share what is to spare, so the four boxes are one width.
+        self.art_frame.grid_columnconfigure(0, weight=1)
+        self.art_frame.grid_columnconfigure(1, weight=1)
+
+    def show_path_end(self, box, path):
+        """Keep the end of a path in view in a narrow box: the file's name is what tells one path from another.
+
+        When the path is set (Browse, a profile, Restore page) and when the box
+        is left. Not while it is being typed in.
+        """
+        def show_end(*_args):
+            try:
+                box.xview_moveto(1.0)
+            except tk.TclError:
+                pass  # the window is closing
+
+        def path_set(*_args):
+            try:
+                if box.focus_get() is not box:
+                    box.after_idle(show_end)
+            except (tk.TclError, KeyError, RuntimeError):
+                pass  # the window is closing, or Tk cannot say who has the focus: the path is set all the same
+
+        path.trace_add("write", path_set)
+        box.bind("<FocusOut>", show_end, add="+")
+        box.after_idle(show_end)
+
+    def fit_dialog_to_screen(self, dialog, width, height=None):
+        """Size a built dialog to what it holds, within the work area, and let the author resize it.
+
+        `height` is for a dialog that wants more than its widgets ask for: one
+        that scrolls inside (Configure Code Signing) or is laid out with room
+        to spare (Check My Setup). It gets that when the work area has it, and
+        never less than what it holds if that fits.
+
+        Where the work area is smaller than what the dialog holds, the dialog
+        is cut: nothing in Rialto scrolls to make up for it (the owner's
+        ruling). That is said in the log, one line each time it happens.
+        """
+        try:
+            dialog.update_idletasks()
+            # Over the window it was opened from. Asking who has the focus here could answer "this dialog".
+            parent = dialog.master if isinstance(dialog.master, (tk.Tk, tk.Toplevel)) else self.root
+            title, seen, _unseen = self.window_frame()
+            holds_w, holds_h = dialog.winfo_reqwidth(), dialog.winfo_reqheight()
+            height = self.dialog_height_for(max(holds_h, int(height or 0)),
+                                            self.available_space(parent)[3], title + seen)
+            given_w, given_h = self.centre_on(dialog, width, height, parent)
+            # Told that a window may be resized, Tk makes the window's frame again, even when it already could
+            # be, and Windows draws a new frame's title bar light: the dark one themed_dialog asked for was gone
+            # from every fitted dialog. So Tk is told only when it has to be, and the dark title bar is asked
+            # for again, last, whatever was done to the frame.
+            if tuple(dialog.resizable()) != (1, 1):
+                dialog.resizable(True, True)
+            self.darken_title_bar(dialog)
+            # Given less than it holds because the work area had no more. A dialog narrower than its widgets ask
+            # because Rialto chose that width is not the screen's doing, and is not said.
+            short = []
+            if given_h < holds_h:
+                short.append("%d pixels tall with room for %d" % (holds_h, given_h))
+            if given_w < min(holds_w, int(width)):
+                short.append("%d pixels wide with room for %d" % (holds_w, given_w))
+            if short:
+                self.update_status("⚠️ %s does not fit this screen: it is %s, so part of it is cut off. "
+                                   "If Windows' display Scale is above 100%%, lowering it makes room "
+                                   "(Settings > System > Display)."
+                                   % (getattr(dialog, "shown_name", "") or dialog.title(), " and ".join(short)))
+        except tk.TclError:
+            pass
+
     def themed_dialog(self, title, subtitle=None, width=620, height=440):
         """A Toplevel that looks like the rest of Rialto.
 
@@ -1122,10 +2255,12 @@ class RialtoApp:
         # The caption says Rialto, the header inside says what this dialog is.
         # Both saying "Disc Extras" put the same words on the screen twice.
         dialog.title(APP_NAME)
+        dialog.shown_name = title  # for the log, should the screen be too small for it (fit_dialog_to_screen)
         dialog.configure(bg=theme["bg"])
         self.centre_on(dialog, width, height, parent)
         dialog.transient(parent)
         dialog.grab_set()
+        quiet_alt_tap(dialog)  # no menu bar here: a bare Alt would only freeze a build
 
         icon_path = asset_path("bird_icon.ico")
         if os.path.exists(icon_path):
@@ -1169,6 +2304,10 @@ class RialtoApp:
         offline-page confirmation is three short paragraphs and the old fixed
         box cropped anything past two lines.
         """
+        if getattr(self, "_close_when_stopped", False):
+            return False if kind == "yesno" else None  # Rialto is closing: no more questions
+        if getattr(self, "_batch", None) is not None:
+            return self.batch_answer(title, message, kind)
         theme = self.current_theme()
 
         lines = sum(max(1, len(part) // 52 + 1) for part in message.split("\n"))
@@ -1183,6 +2322,7 @@ class RialtoApp:
         popup.resizable(False, False)
         popup.transient(parent)
         popup.grab_set()
+        quiet_alt_tap(popup)
 
         icon_path = asset_path("bird_icon.ico")
         if os.path.exists(icon_path):
@@ -1254,8 +2394,51 @@ class RialtoApp:
 
 
     def on_exit(self):
+        """Every way of closing Rialto comes here: the title bar's X, File > Exit, Alt+F4."""
+        if getattr(self, "_building", False) or getattr(self, "_queue_running", False):
+            # The window answers during a build now (1.5.1, B6), so it can be
+            # closed during one. Ask, and stop the running tool if the answer is yes.
+            batch, self._batch = getattr(self, "_batch", None), None  # a real question, even mid-queue
+            asked = self.show_centered_popup(
+                    "A build is running",
+                    "Rialto is still making your disc. Stop the build and close Rialto?\n\n"
+                    "What it has made so far stays in the output folder, unfinished.",
+                    kind="yesno")
+            self._batch = batch
+            if not asked:
+                return
+            self._abandon_build = True
+            self._close_when_stopped = True
+            tool = getattr(self, "_running_tool", None)
+            if tool is not None and tool.poll() is None:
+                tool.kill()
+            # The build is still on the stack below this click. The window goes
+            # now; the build stops at its next check, and close_if_asked closes
+            # Rialto once it has unwound, so nothing writes to a destroyed window.
+            for window in [self.root] + [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]:
+                try:
+                    window.withdraw()
+                except tk.TclError:
+                    pass
+            return
+        self.close_now()
+
+    def close_now(self):
+        """Save the session and close the window."""
         self.save_last_session()
-        self.root.destroy()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+    def close_if_asked(self):
+        """Close Rialto once a build the person chose to stop has unwound."""
+        if not getattr(self, "_close_when_stopped", False):
+            return
+        if getattr(self, "_building", False) or getattr(self, "_queue_running", False):
+            return
+        self._close_when_stopped = False
+        self.close_now()
 
 
 
@@ -1286,6 +2469,8 @@ class RialtoApp:
                     self.disc_icon_var.set(profile_data.get("DiscIcon", ""))
                     self.disc_name_var.set(profile_data.get("DiscName", ""))
                     self.game_executables = profile_data.get("GameExecutables", []) or []
+                    self.game_shortcuts = bool(profile_data.get("GameShortcuts", False))
+                    self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]
                     self.refresh_game_exes_summary()
 
 
@@ -1318,7 +2503,7 @@ class RialtoApp:
             pass
 
 
-        self.title_label = tk.Label(self.title_bar, text="Rialto 1.5", bg=self.dark_theme["bg"], fg=self.dark_theme["fg"], font=("Segoe UI", 10, "bold"))
+        self.title_label = tk.Label(self.title_bar, text=f"Rialto {__version__}", bg=self.dark_theme["bg"], fg=self.dark_theme["fg"], font=("Segoe UI", 10, "bold"))
         self.title_label.pack(side="left", padx=10)
 
         # Close Button
@@ -1328,7 +2513,7 @@ class RialtoApp:
             fg=self.dark_theme["fg"],
             relief="flat", bd=0,
             font=("Segoe UI", 10, "bold"),
-            command=self.root.destroy
+            command=self.on_exit
         )
         self.close_btn.pack(side="right", padx=(2, 8))
         ToolTip(self.close_btn, "Close")
@@ -1399,15 +2584,17 @@ class RialtoApp:
         add_menu("Disc", [
             ("Games on Disc…", self.configure_game_exes),
             ("Disc Extras…", self.configure_disc_extras),
+            ("Files to Place on the PC…", self.configure_placed_files),
+            ("Build Queue…", self.configure_build_queue),
             None,
             ("Configure Signing…", self.configure_signing),
         ])
         add_menu("Tools", [
-            ("Import a GOG Installer…", self.import_gog_installer),
-            ("Export an .msix Package…", self.export_msix),
+            ("Import GOG…", self.import_gog_installer),
+            ("Export .msix…", self.export_msix),
         ])
         add_menu("View", [
-            ("Switch Between Dark and Light", self.toggle_theme),
+            ("Dark / Light", self.toggle_theme),
         ])
         add_menu("Help", [
             ("Help Guide", self.open_help_guide),
@@ -1426,6 +2613,7 @@ class RialtoApp:
         self.build_export_bar()
 
         frame = ttk.Frame(self.main_content)
+        self.page_frame = frame
 
         # Set global font and padding
         default_font = ("Segoe UI", 10)
@@ -1470,10 +2658,10 @@ class RialtoApp:
         self.tutorial_box._rialto_style = "Tutorial.TFrame"
         self.tutorial_box.pack(pady=(0, 8), fill="x", ipady=2)
 
-        def tutorial_line(icon_name, text, bold=False, pad=(0, 1)):
+        def tutorial_line(icon_name, text, bold=False, pad=(0, 1), parent=None):
             # TutorialRow, not Tutorial: the card carries the groove border and
             # a row that inherited it drew a light bar under every icon.
-            row = ttk.Frame(self.tutorial_box, style="TutorialRow.TFrame")
+            row = ttk.Frame(parent or self.tutorial_box, style="TutorialRow.TFrame")
             row._rialto_style = "TutorialRow.TFrame"
             row.pack(fill="x", padx=12, pady=pad)
 
@@ -1493,16 +2681,31 @@ class RialtoApp:
                               font=("Segoe UI", 10, "bold" if bold else "normal"))
             label._rialto_style = "Tutorial.TLabel"
             label.pack(side="left", fill="x", expand=True)
+            return row
 
-        tutorial_line("disc", "Three steps to a disc.", bold=True, pad=(8, 2))
-        tutorial_line(None, "1.  Put your game in its own folder, then browse to it below.")
-        tutorial_line(None, "2.  Fill in the name and art. Hover any field for what it wants.")
-        tutorial_line(None, "3.  Preview the menu, then build. Your ISO lands in the output folder.")
+        title_row = tutorial_line("disc", "Three steps to a disc.", bold=True, pad=(8, 2))
+        # Everything under the title starts folded on every screen (his word, 19 Oct 2026; it used to fold
+        # only on a short one), so the page opens on Step 1. Show opens it.
+        self.tutorial_more = ttk.Frame(self.tutorial_box, style="TutorialRow.TFrame")
+        self.tutorial_more._rialto_style = "TutorialRow.TFrame"
+        more = self.tutorial_more
+        tutorial_line(None, "1.  Put your game in its own folder, then browse to it below.", parent=more)
+        tutorial_line(None, "2.  Fill in the name and art. Hover any field for what it wants.", parent=more)
+        tutorial_line(None, "3.  Preview the menu, then build. Your ISO lands in the output folder.", parent=more)
         tutorial_line("image", "Background: an animated GIF or a still JPG, at 1280x720.",
-                      pad=(8, 1))
-        tutorial_line("tile", "Icons: .ico files at 256x256. icoconvert.com turns a PNG into one.")
-        tutorial_line("gift", "Extras: bonus material, a mod tool, Mac and Linux builds all live "
-                              "under Disc, Disc Extras.", pad=(0, 8))
+                      pad=(8, 1), parent=more)
+        tutorial_line("tile", "Icons: .ico files at 256x256. icoconvert.com turns a PNG into one.", parent=more)
+        tutorial_line("gift", "Disc Extras: bonus content, mods, Steam, a compatibility mode, files for "
+                              "the player's PC, Mac and Linux.", pad=(0, 8), parent=more)
+        self.tutorial_toggle = ttk.Label(title_row, text="Show", style="Tutorial.TLabel", cursor="hand2",
+                                         font=("Segoe UI", 9, "underline"))
+        self.tutorial_toggle._rialto_style = "Tutorial.TLabel"
+        self.tutorial_toggle.pack(side="right")
+        ToolTip(self.tutorial_toggle, "Shows or hides the three steps, the art sizes and what Disc Extras "
+                                      "holds.")
+        # Open (packed) folds, folded opens.
+        self.tutorial_toggle.bind("<Button-1>", lambda _e: self.fold_tutorial(
+            bool(self.tutorial_more.winfo_manager())))
 
         frame.pack(fill="both", expand=True, padx=10, pady=(8, 0))
 
@@ -1551,12 +2754,42 @@ class RialtoApp:
         ToolTip(self.select_btn,
                 "Pick the folder holding your game. Rialto opens in its own input folder, "
                 "but the game can live anywhere on your PC.")
+        # Build Queue beside Browse (his word, 19 Oct 2026): a queue is the other way to start, and it
+        # was only in the Disc menu. The Disc menu keeps it too.
+        or_label = ttk.Label(step_row, text="or", style="Path.TLabel")
+        or_label._rialto_style = "Path.TLabel"
+        or_label.pack(side="left", padx=(8, 0))
+        self.queue_btn = self.icon_button(
+            step_row, "queue", "Build Queue", self.configure_build_queue, size=18, side="left", padx=(8, 0))
+        ToolTip(self.queue_btn, "Build several discs in one run: add saved profiles, each with the game "
+                                "folder it builds. No folder is needed here.")
 
         self.game_path_var = tk.StringVar(value="No folder chosen yet")
-        self.game_path_label = ttk.Label(step_row, textvariable=self.game_path_var,
+        # What the row shows: with Build Queue beside Browse there is less room, so a long path is shown
+        # from its end, since the game's own folder name is what tells one path from another.
+        self.game_path_shown = tk.StringVar(value=self.game_path_var.get())
+        self.game_path_label = ttk.Label(step_row, textvariable=self.game_path_shown,
                                          style="Path.TLabel")
         self.game_path_label._rialto_style = "Path.TLabel"
         self.game_path_label.pack(side="left", padx=(10, 4), fill="x", expand=True)
+
+        def show_game_path(*_args):
+            text = self.game_path_var.get()
+            try:
+                room = self.game_path_label.winfo_width() - 4
+                font = tkfont.Font(root=self.root, font=ttk.Style().lookup("Path.TLabel", "font")
+                                   or "TkDefaultFont")
+            except tk.TclError:
+                return  # the window is closing
+            if room > 40 and font.measure(text) > room:
+                while len(text) > 1 and font.measure("\u2026" + text) > room:
+                    text = text[1:]
+                text = "\u2026" + text
+            if self.game_path_shown.get() != text:
+                self.game_path_shown.set(text)
+
+        self.game_path_var.trace_add("write", show_game_path)
+        self.game_path_label.bind("<Configure>", show_game_path, add="+")
 
         self.meta_frame = ttk.LabelFrame(frame, text="Step 2: metadata")
         self.meta_frame.pack(fill="x", pady=(0, 8))
@@ -1591,7 +2824,7 @@ class RialtoApp:
                 ToolTip(entry, "Who is publishing the game, if that is somebody other than you. "
                                "Leave it empty and the copyright line follows Developer instead.")
             elif key == "Start Menu Name":
-                ToolTip(entry, "The name players see in their Windows Start Menu. Fills in from Game Title until you type your own.")
+                ToolTip(entry, "The name players see in the Windows Start Menu. Fills in from Game Title until you type your own.")
 
         # Copyright Text (inside Metadata frame, follows Publisher or Developer)
         copyright_row = ttk.Frame(self.meta_frame)
@@ -1696,12 +2929,15 @@ class RialtoApp:
         exe_row = ttk.Frame(self.disc_frame)
         exe_row.pack(fill="x", padx=4, pady=4)
         ttk.Label(exe_row, text="Games on Disc:", width=20).pack(side="left", padx=(0, 4), pady=2)
-        self.game_exes_summary_var = tk.StringVar(value="Auto-detect (single game)")
+        self.game_exes_summary_var = tk.StringVar(value="One game, found by Rialto")
         exe_summary = ttk.Entry(exe_row, textvariable=self.game_exes_summary_var, state="readonly")
         exe_summary.pack(side="left", fill="x", expand=True)
-        exe_btn = ttk.Button(exe_row, text="Configure", command=self.configure_game_exes, style="Rounded.TButton")
+        # "Add Games", not "Configure" (his word, 19 Oct 2026: Configure was walked past).
+        exe_btn = ttk.Button(exe_row, text="Add Games\u2026", command=self.configure_game_exes, style="Rounded.TButton")
         exe_btn.pack(side="left", padx=(6, 4), pady=2)
-        exe_tip = "Want more than one game on the disc? Click Configure and check each game. Players get a Choose Your Game screen. Leave on auto-detect for a normal single-game disc."
+        exe_tip = ("One game? Leave this alone: Rialto finds it by itself. More than one? Click Add Games, then "
+                   "double-click each game, or let Find a game in each folder do it. Players then pick a game "
+                   "from Play Games on the disc menu.")
         ToolTip(exe_summary, exe_tip)
         ToolTip(exe_btn, exe_tip)
 
@@ -1709,14 +2945,38 @@ class RialtoApp:
         media_row = ttk.Frame(self.disc_frame)
         media_row.pack(fill="x", padx=4, pady=4)
         ttk.Label(media_row, text="Target Media:", width=20).pack(side="left", padx=(0, 4), pady=2)
+        # As tall as the list, so every disc shows when it opens and none is
+        # scrolled to (1.5.1, minis: fifteen choices, past Tk's ten).
         media_combo = ttk.Combobox(media_row, textvariable=self.target_media_var, state="readonly",
-                                   values=[name for name, _cap in self.MEDIA_TYPES])
+                                   values=[name for name, _cap in self.MEDIA_TYPES],
+                                   height=len(self.MEDIA_TYPES), style="Media.TCombobox",
+                                   postcommand=lambda: self.widen_media_list(media_combo))
         media_combo.pack(side="left", fill="x", expand=True)
         media_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_disc_meter())
+        # On the Target Media row, not a row of their own: at 1080p another row
+        # would push the log back under the build bar.
+        compression_label = ttk.Label(media_row, text="Compression:")
+        compression_label.pack(side="left", padx=(6, 4))
+        compression_combo = ttk.Combobox(media_row, textvariable=self.compression_var, state="readonly",
+                                         width=12, values=[label for label, _setting in COMPRESSION_CHOICES])
+        compression_combo.pack(side="left")
+        # Fastest install stores the game as it is, so the meter weighs it again.
+        compression_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_disc_meter())
+        compression_tip = ("How hard the installer squeezes your game. Balanced suits most games. Smallest "
+                           "disc squeezes hardest, so the build takes longer. Fastest install stores the game "
+                           "as it is, so setup only copies it, and the disc is bigger, which can mean "
+                           "more discs.")
+        ToolTip(compression_label, compression_tip)
+        ToolTip(compression_combo, compression_tip)
+        pressed_check = self.themed_check(media_row, "Pressed", self.pressed_disc_var, side="left", padx=(8, 0))
+        ToolTip(pressed_check, "Tick this when a pressing plant will make your discs. Rialto adds the "
+                               "checksum file and a master sheet to send with them, and works out the layer "
+                               "break for a dual-layer DVD. Pressing works with CD and DVD, full size or 8 cm, and DVD DL.")
         extras_btn = ttk.Button(media_row, text="Disc Extras", command=self.configure_disc_extras, style="Rounded.TButton")
         extras_btn.pack(side="left", padx=(6, 4), pady=2)
-        ToolTip(media_combo, "Pick the disc you plan to burn. If your game is too big for one disc, Rialto builds a numbered multi-disc set automatically. Auto means one disc, any size.")
-        ToolTip(extras_btn, "Bonus material, a mod tool, an ADD TO STEAM button for players, and Mac or Linux builds riding along on the same disc.")
+        ToolTip(media_combo, "Pick the disc you plan to burn. If your game is too big for one disc, Rialto builds a numbered multi-disc set automatically. Auto means one disc, any size. Mini means the small 8 cm disc, which needs a tray drive.")
+        ToolTip(extras_btn, "Bonus content, a mod tool, an Add to Steam button, a compatibility mode, files for the "
+                            "player's PC, and Mac or Linux builds on the same disc. All optional.")
 
         # === Artwork ===
         self.art_frame = ttk.LabelFrame(frame, text="Step 4: artwork")
@@ -1774,7 +3034,7 @@ class RialtoApp:
         ico_entry.pack(side="left", fill="x", expand=True)
         ico_browse = ttk.Button(ico_row, text="Browse", command=self.browse_ico, style="Rounded.TButton")
         ico_browse.pack(side="left", padx=(0, 4), pady=2)
-        ico_tip = "The icon for your installer and desktop shortcut: the small image players see in their Start Menu and taskbar. Needs to be a 256x256 .ico file. You can convert a PNG at icoconvert.com."
+        ico_tip = "The icon for your installer and desktop shortcut: the small image players see in the Start Menu and taskbar. Needs to be a 256x256 .ico file. You can convert a PNG at icoconvert.com."
         ToolTip(ico_row, ico_tip)
         ToolTip(ico_entry, ico_tip)
         ToolTip(ico_browse, "Pick your game's icon file (.ico format).")
@@ -1873,20 +3133,25 @@ class RialtoApp:
         self.disc_bar.bind("<Configure>", lambda _e: self.draw_disc_meter())
 
         meter_tip = ("Roughly how much of the disc your game fills. Measured from your game "
-                     "folder and artwork before compression, so the finished ISO is usually "
-                     "smaller. Change Target Media to see it against a different disc.")
+                     "folder and artwork before compression, so with Balanced or Smallest disc the "
+                     "finished ISO is often smaller, and with Fastest install about the same. "
+                     "Change Target Media to see it against a different disc. During a build "
+                     "this line says what Rialto is doing and how far it has got.")
         ToolTip(self.disc_meter, meter_tip)
         ToolTip(self.disc_fill_label, meter_tip)
 
         # --- Row 2: build and preview ---
         action_row = surface(tk.Frame(inner, bg=theme["header_bg"]))
         action_row.pack(fill="x", pady=(10, 0))
+        self.export_action_row = action_row
 
         build_btn = self.icon_button(action_row, "play", "BUILD GAME INSTALLER",
                                      self.run_build_process, style="Build.TButton", size=15)
         build_btn.pack(side="left", ipady=6, fill="x", expand=True)
+        self.build_btn = build_btn
         ToolTip(build_btn, "Makes the whole disc: installer, disc menu, artwork and the final ISO, "
-                           "in one pass. The log above says what it is doing at each step.")
+                           "in one pass. The log above says what it is doing at each step, and the line "
+                           "above this button says how far it has got and for how long.")
 
         # Disc Extras sits here as well as beside Target Media. It is where
         # bonus content, mods, Steam and the Mac and Linux builds live, and up
@@ -1894,15 +3159,16 @@ class RialtoApp:
         extras_btn = self.icon_button(action_row, "gift", "Disc Extras",
                                       self.configure_disc_extras, size=15)
         extras_btn.pack(side="left", padx=(8, 0), ipady=6)
-        ToolTip(extras_btn, "Bonus content, a mod tool, the ADD TO STEAM button, and Mac or Linux "
-                            "builds riding along on the same disc. All optional.")
+        ToolTip(extras_btn, "Bonus content, a mod tool, the Add to Steam button, a compatibility mode, "
+                            "files for the player's PC, and Mac or Linux builds on the same disc. All optional.")
 
         preview_btn = self.icon_button(action_row, "eye", "Preview Disc Menu",
                                        self.preview_disc_menu, size=15)
         preview_btn.pack(side="left", padx=(8, 0), ipady=6)
         ToolTip(preview_btn, "Opens your disc menu exactly as players will see it, in a few seconds. "
-                             "Nothing is built or burned, and Play and Uninstall are switched off "
-                             "so you can click around freely.")
+                             "Nothing is built or burned. Starting a game and Uninstall are switched "
+                             "off, so you can click around freely. On a disc of several games, Play "
+                             "Games opens the Choose Your Game page.")
 
         signing_btn = self.icon_button(action_row, "gear", "Configure Signing",
                                        self.configure_signing, size=15)
@@ -1977,8 +3243,12 @@ class RialtoApp:
             var.set("")
 
         self.game_executables = []
+        self.game_shortcuts = False
+        self.placed_files = []
         self.refresh_game_exes_summary()
         self.target_media_var.set("Auto (single disc)")
+        self.compression_var.set("Balanced")
+        self.pressed_disc_var.set(False)
         self.usb_export_var.set(False)
         self.sign_final_build.set(False)
         self.remove_wti_branding.set(False)
@@ -1999,6 +3269,34 @@ class RialtoApp:
     # setup.exe. They are not on disk yet when the meter runs, so their weight
     # is allowed for rather than measured.
     RUNTIME_ALLOWANCE = 26 * 1024 * 1024
+    # What they really weigh when the installer stores them as they are (Fastest install): the two
+    # Visual C++ redistributables, about 39 MB, and the DLLs copied beside the game (1.5.1, end-to-end runs).
+    RUNTIME_STORED = 42 * 1024 * 1024
+    # What rides on Disc 1 beside the menu and the folders: setup.exe's loader (2.6 MB measured),
+    # autorun.inf, README.txt, the two .bat files and the MULTI-DISC README.
+    DISC1_FILES_ALLOWANCE = 3 * 1024 * 1024
+
+    def widen_media_list(self, combo):
+        """Open the Target Media list as wide as its longest name (bugs review, 1.5.1).
+
+        The box shares its row with Compression, so "Blu-ray XL 128 GB (BD-R quad layer)" is cut in it, and a
+        ttk list opens only as wide as its box. Just before the list opens, its style's postoffset widens it
+        to the longest name in the list's own font, kept on the screen. The closed box may still cut the
+        longest names; the line under the log names the whole choice.
+        """
+        try:
+            popdown = combo.tk.eval("ttk::combobox::PopdownWindow %s" % combo)
+            font = tkfont.Font(root=combo, font=combo.tk.call(popdown + ".f.l", "cget", "-font"))
+            longest = max(font.measure(str(name)) for name in combo.cget("values"))
+            # The list's own border and padding, its frame's border, and a little air.
+            need = longest + font.measure("0") * 2 + 12
+            extra = max(need - combo.winfo_width(), 0)
+            left, _top, width, _height = self.available_space()
+            right = combo.winfo_rootx() + combo.winfo_width() + extra
+            shift = max(min(left + width - right, 0), left - combo.winfo_rootx())
+            ttk.Style(combo).configure("Media.TCombobox", postoffset=(shift, 0, extra, 0))
+        except (tk.TclError, ValueError):
+            pass
 
     def menu_staging_bytes(self):
         """Weight of the menu folder the build will stage, in bytes.
@@ -2047,16 +3345,6 @@ class RialtoApp:
                    self.ico_path_var, self.disc_icon_var, self.mac_build_var,
                    self.linux_build_var, self.bonus_folder_var)]
 
-        def folder_size(folder):
-            total = 0
-            for root_dir, _dirs, files in os.walk(folder):
-                for name in files:
-                    try:
-                        total += os.path.getsize(os.path.join(root_dir, name))
-                    except OSError:
-                        pass
-            return total
-
         # What the disc carries beyond the game folder, and what it carries
         # twice. The meter used to weigh the source folder and stop there,
         # which could read well under the finished disc - the author
@@ -2068,34 +3356,107 @@ class RialtoApp:
         duplicated.extend([self.mac_build_var.get().strip(),
                            self.linux_build_var.get().strip()])
         menu_extra = self.menu_staging_bytes()
+        icons = [self.ico_path_var.get().strip(), self.disc_icon_var.get().strip()]
+        stored = getattr(self, "compression_var", None) is not None and \
+            self.compression_var.get() == "Fastest install"
 
         def measure():
-            total = folder_size(path)
-            for extra in extras:
-                # Art already inside the game folder is counted once, not twice
-                if not extra or extra.startswith(path):
-                    continue
-                if os.path.isfile(extra):
-                    try:
-                        total += os.path.getsize(extra)
-                    except OSError:
-                        pass
-                elif os.path.isdir(extra):
-                    total += folder_size(extra)
-
-            # These ride on the disc root AND inside the installer, so they
-            # land on the media twice however they were counted above.
-            for folder in duplicated:
-                if folder and os.path.isdir(folder):
-                    total += folder_size(folder)
-
-            self._fill_bytes = total + menu_extra
+            self._fill_bytes, self._disc1_bytes = self.disc_weights(path, extras, duplicated, menu_extra,
+                                                                    icons, stored)
             try:
                 self.root.after(0, self.draw_disc_meter)
             except (RuntimeError, tk.TclError):
                 pass  # window closed while the walk was still running
 
         threading.Thread(target=measure, daemon=True).start()
+
+    def disc_weights(self, path, extras, duplicated, menu_extra, icons=(), stored=False):
+        """(what the disc holds, what of it rides on Disc 1 beside the installer's slices), in bytes.
+
+        Never touches the window, so it runs on the meter's worker thread. `duplicated` are the folders that
+        go on the disc root and inside the installer (mods, bonus, Mac, Linux); `menu_extra` is
+        menu_staging_bytes(); `icons` the game and disc icons; `stored` is Fastest install.
+
+        Disc 1 is weighed as create_spanned_isos fills it (bugs review, 1.5.1): the menu folder, the disc-root
+        copies of the duplicated folders, setup.exe, autorun.inf, the READMEs and the icons, each file in
+        whole sectors as a disc holds it. Only the setup-N.bin slices are packed onto the other discs.
+
+        A Fastest install build stores everything as it is, so the total there also counts the menu a
+        second time (it is on the disc root and inside the installer), the runtimes at their real weight,
+        and Disc 1's own files (end-to-end runs, 1.5.1). The total for the other compressions is as before.
+        """
+        def folder_size(folder):
+            total = 0
+            for root_dir, _dirs, files in os.walk(folder):
+                for name in files:
+                    try:
+                        total += os.path.getsize(os.path.join(root_dir, name))
+                    except OSError:
+                        pass
+            return total
+
+        def on_disc(size):
+            return (-(-size // 2048) + 1) * 2048  # whole sectors, and one for its record
+
+        def folder_on_disc(folder):
+            total = 0
+            for root_dir, _dirs, files in os.walk(folder):
+                total += 2048
+                for name in files:
+                    try:
+                        total += on_disc(os.path.getsize(os.path.join(root_dir, name)))
+                    except OSError:
+                        pass
+            return total
+
+        def inside_game(extra):
+            # A folder beside the game whose name starts the same ("Demo Linux" beside "Demo") is not in it.
+            try:
+                return os.path.commonpath([os.path.abspath(extra), os.path.abspath(path)]) == os.path.abspath(path)
+            except ValueError:
+                return False
+
+        total = folder_size(path)
+        for extra in extras:
+            # Art already inside the game folder is counted once, not twice
+            if not extra or inside_game(extra):
+                continue
+            if os.path.isfile(extra):
+                try:
+                    total += os.path.getsize(extra)
+                except OSError:
+                    pass
+            elif os.path.isdir(extra):
+                total += folder_size(extra)
+
+        # These ride on the disc root AND inside the installer, so they
+        # land on the media twice however they were counted above.
+        disc1 = max(menu_extra - self.RUNTIME_ALLOWANCE, 0) + self.DISC1_FILES_ALLOWANCE
+        for folder in duplicated:
+            if folder and os.path.isdir(folder):
+                total += folder_size(folder)
+                disc1 += folder_on_disc(folder)
+
+        # The icons on the disc root: the ones picked, and every .ico at the game folder's root, which the
+        # build copies beside setup.exe.
+        icon_bytes = 0
+        named = {os.path.normcase(os.path.abspath(i)) for i in icons if i and os.path.isfile(i)}
+        try:
+            named |= {os.path.normcase(os.path.join(path, n)) for n in os.listdir(path) if n.lower().endswith(".ico")}
+        except OSError:
+            pass
+        for icon in named:
+            try:
+                icon_bytes += on_disc(os.path.getsize(icon))
+            except OSError:
+                pass
+        disc1 += icon_bytes
+
+        fill = total + menu_extra
+        if stored:
+            fill += (max(menu_extra - self.RUNTIME_ALLOWANCE, 0) + self.RUNTIME_STORED - self.RUNTIME_ALLOWANCE
+                     + self.DISC1_FILES_ALLOWANCE + icon_bytes)
+        return fill, disc1
 
     def draw_disc_meter(self):
         """Paint the little disc and the bar beside it from self._fill_bytes."""
@@ -2105,8 +3466,23 @@ class RialtoApp:
         total = self._fill_bytes
         capacity = self.get_target_media_capacity()
         usable = (capacity - self.MEDIA_RESERVE) if capacity else 0
+        # A mini disc (1.5.1, minis) is weighed as the build will weigh it. The
+        # total already holds the menu, so it is set against the disc less the
+        # filesystem margin, the same line create_iso draws between one disc
+        # and a set; and a set is counted as create_spanned_isos packs it. The
+        # reserve is 2% of a DVD but nearly half a mini CD, so the larger
+        # discs' sum, which takes it off as well, would call a demo two minis
+        # when it is one.
+        mini = self.target_media_var.get() in MINI_DISC_MEDIA
+        if mini and capacity:
+            usable = capacity - self.SPAN_MARGIN
 
-        if not total:
+        progress = getattr(self, "_build_line", None)
+        if progress is not None:
+            # A build is running (1.5.1, B6): this row is its live line.
+            text, fraction = progress[0], progress[1] or 0.0
+            color = theme["meter_fill"]
+        elif not total:
             fraction = 0.0
             text = "No game folder chosen yet"
             color = theme["meter_fill"]
@@ -2126,8 +3502,15 @@ class RialtoApp:
                 color = theme["meter_over"]
             text = "%.2f GB of %.2f GB usable on %s - %d%%" % (
                 total / 1e9, usable / 1e9, label, percent)
+            if mini and usable < 1e9:
+                text = "%d MB of %d MB usable on %s - %d%%" % (
+                    total // 1_000_000, usable // 1_000_000, label, percent)
             if fraction > 1.0:
                 discs = int(total // usable) + 1
+                if mini:
+                    base = min(getattr(self, "_disc1_bytes", 0), total)
+                    discs = spanned_disc_count(base, total - base, capacity,
+                                               self.MEDIA_RESERVE, self.SPAN_MARGIN)
                 text += " - about %d discs" % discs
 
         self.disc_fill_var.set(text)
@@ -2198,6 +3581,28 @@ class RialtoApp:
 
     def save_profile(self):
         """Save profile data"""
+        profile_data = self.current_profile_data()
+
+        # Default to templates folder
+        templates_dir = TEMPLATES_DIR
+        os.makedirs(templates_dir, exist_ok=True)
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json")],
+            title="Save Rialto Profile",
+            initialdir=templates_dir
+        )
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(profile_data, f, indent=4)
+                self.update_status(f"✅ Profile saved: {os.path.basename(file_path)}")
+            except Exception as e:
+                self.update_status(f"❌ Failed to save profile: {e}")
+
+    def current_profile_data(self):
+        """Everything on the form, as a profile: Save Profile's, and the Build Queue's snapshot (B1)."""
         # Only save the essential fields (cleaned up)
         profile_data = {k: entry.get() for k, entry in self.entries.items()}
         
@@ -2211,7 +3616,11 @@ class RialtoApp:
         profile_data["DiscName"] = self.disc_name_var.get()
         profile_data["RemoveWTIBranding"] = self.remove_wti_branding.get()
         profile_data["GameExecutables"] = self.game_executables
+        profile_data["GameShortcuts"] = bool(self.game_shortcuts)
+        profile_data["PlacedFiles"] = self.placed_files
         profile_data["TargetMedia"] = self.target_media_var.get()
+        profile_data["Compression"] = self.compression_var.get()
+        profile_data["PressedDisc"] = bool(self.pressed_disc_var.get())
         profile_data["MacBuild"] = self.mac_build_var.get()
         profile_data["LinuxBuild"] = self.linux_build_var.get()
         profile_data["SteamButton"] = bool(self.steam_button_var.get())
@@ -2225,24 +3634,7 @@ class RialtoApp:
         # Add metadata for profile version (for future compatibility)
         profile_data["_ProfileVersion"] = "2.2"
         profile_data["_CreatedBy"] = f"{APP_NAME} {__version__}"
-
-        # Default to templates folder
-        templates_dir = TEMPLATES_DIR
-        os.makedirs(templates_dir, exist_ok=True)
-
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".json", 
-            filetypes=[("JSON Files", "*.json")],
-            title="Save Rialto Profile",
-            initialdir=templates_dir
-        )
-        if file_path:
-            try:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    json.dump(profile_data, f, indent=4)
-                self.update_status(f"✅ Profile saved: {os.path.basename(file_path)}")
-            except Exception as e:
-                self.update_status(f"❌ Failed to save profile: {e}")
+        return profile_data
 
     def load_profile(self):
         """Load profile data"""
@@ -2256,6 +3648,15 @@ class RialtoApp:
             title="Load Rialto Profile",
             initialdir=templates_dir
         )
+        if file_path:
+            self.apply_profile_file(file_path)
+
+    def apply_profile_file(self, file_path, remember=True):
+        """Put one profile file on the form: Load Profile's work, and each Build Queue row's (B1).
+
+        True when it loaded. `remember` False leaves last_profile.json alone, so
+        a queue does not change which profile Rialto opens with next time.
+        """
         if file_path:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -2287,8 +3688,13 @@ class RialtoApp:
                 self.disc_name_var.set(profile_data.get("DiscName", ""))
                 self.remove_wti_branding.set(profile_data.get("RemoveWTIBranding", False))
                 self.game_executables = profile_data.get("GameExecutables", []) or []
+                self.game_shortcuts = bool(profile_data.get("GameShortcuts", False))
+                self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]
                 self.refresh_game_exes_summary()
                 self.target_media_var.set(profile_data.get("TargetMedia", "Auto (single disc)"))
+                compression = profile_data.get("Compression", "Balanced")
+                self.compression_var.set(compression if compression in dict(COMPRESSION_CHOICES) else "Balanced")
+                self.pressed_disc_var.set(bool(profile_data.get("PressedDisc", False)))
                 self.mac_build_var.set(profile_data.get("MacBuild", ""))
                 self.linux_build_var.set(profile_data.get("LinuxBuild", ""))
                 self.steam_button_var.set(profile_data.get("SteamButton", True))
@@ -2318,16 +3724,26 @@ class RialtoApp:
                 ) if var.get().strip() and not os.path.exists(var.get().strip())]
                 for label, path in stale:
                     self.update_status(f"⚠️ {label} in this profile no longer exists: {path}")
-                if stale:
-                    self.update_status("   Pick the file again, or the disc is built without it.")
+                # What happens next, said truly for each (1.5.1, end-to-end runs): the build will not
+                # start without a menu background and a game icon; the rest it builds without.
+                needed = [label for label, _p in stale if label in ("Menu Background", "Game Icon")]
+                optional = [label for label, _p in stale if label not in needed]
+                if needed:
+                    self.update_status("   Pick %s again under Step 4: the build cannot start without %s."
+                                       % (" and ".join(needed), "them" if len(needed) > 1 else "it"))
+                if optional:
+                    self.update_status("   Pick %s again, or the disc is built without %s."
+                                       % (", ".join(optional), "them" if len(optional) > 1 else "it"))
                 
                 # Save as last used profile
-                profile_name = Path(file_path).name
-                with open(LAST_PROFILE_FILE, "w", encoding="utf-8") as f:
-                    json.dump({"last_profile": profile_name}, f)
-                    
+                if remember:
+                    profile_name = Path(file_path).name
+                    with open(LAST_PROFILE_FILE, "w", encoding="utf-8") as f:
+                        json.dump({"last_profile": profile_name}, f)
+                return True
             except Exception as e:
                 self.update_status(f"❌ Failed to load profile: {e}")
+        return False
 
 
 
@@ -2353,9 +3769,24 @@ class RialtoApp:
     # triple layer. Burnable BD-R versions exist and hold the same data as any
     # other BD-R; what makes a retail UHD movie disc special is AACS 2.0, which
     # nothing here touches.
+    #
+    # The minis (1.5.1, minis) are the 8 cm discs, each listed just before its
+    # full-size kin so the list still runs small to large within a family.
+    # Mini CD: a 24-minute 8 cm CD-R, 108,000 sectors of 2,048 bytes, sold as
+    # 210 MB; the older 21-minute disc (185 MB) is not offered, as 24 is what
+    # blanks are sold as now (Wikipedia, "Mini CD": 21 min 185 MB, 24 min
+    # 210 MB). Mini DVD: an 8 cm single-layer DVD, sold as 1.4 GB. DVD-R 2.0
+    # gives it 712,891 sectors and DVD+R 1.2 gives 714,544 (the DVD-R and
+    # DVD+R specifications' tables, as OSTA's DVD FAQ quotes them, reproduced
+    # at fvue.nl "How many bytes can be stored on a DVD?"), and the DVD Forum's
+    # DVD-1 (8 cm single-layer DVD-ROM, ECMA-267) is 1.46 GB. The smaller,
+    # DVD-R's, is used, written as its specification rounds it, 1,460,000,000
+    # bytes, as DVD 4.7 GB is written 4,700,000,000: a burn never fails.
     MEDIA_TYPES = [
         ("Auto (single disc)", None),
+        ("Mini CD 210 MB (8 cm)", 221_184_000),
         ("CD 700 MB", 737_280_000),
+        ("Mini DVD 1.4 GB (8 cm)", 1_460_000_000),
         ("DVD 4.7 GB", 4_700_000_000),
         ("DVD DL 8.5 GB", 8_540_000_000),
         ("M-DISC DVD 4.7 GB", 4_700_000_000),
@@ -2369,7 +3800,23 @@ class RialtoApp:
         ("Blu-ray XL 128 GB (BD-R quad layer)", 128_000_000_000),
     ]
     # Room kept free on each disc for the menu, setup stub, art and filesystem
+    #
+    # The minis keep the same 96 MiB (1.5.1, minis), on measurement. Four real
+    # Rialto discs carried 71.2 to 78.8 MB beside the installer slices: menu.exe
+    # 37.4 MB, a GIF background of up to 31.6 MB, the runtimes and Steam art
+    # beside the menu about 6.5 MB, setup.exe 2.2 to 2.6 MB, two icons, and
+    # under 0.1 MB of filesystem. Without a GIF it is about 48 MB. The first
+    # slice shares Disc 1 only when that rides in the reserve less SPAN_MARGIN,
+    # 80 MiB (83.9 MB): the heaviest, 75.2 MiB, fits with 4.8 MiB to spare. A
+    # smaller reserve on a mini would put a disc's menu on a disc of its own.
     MEDIA_RESERVE = 96 * 1024 * 1024
+    # What a disc of a spanned set may really hold: the media less a little for
+    # the filesystem itself (1.5.1). MEDIA_RESERVE is already taken off every
+    # installer slice (get_disk_slice_size), and it is that room which carries
+    # the menu and setup.exe on Disc 1. Packing the discs against the media less
+    # the reserve again counted it twice: Disc 1 went out with only the menu on
+    # it, and a 1.2 GB game took four CDs where two hold it.
+    SPAN_MARGIN = 16 * 1024 * 1024
 
     def get_target_media_capacity(self):
         selected = self.target_media_var.get() if hasattr(self, "target_media_var") else ""
@@ -2393,7 +3840,7 @@ class RialtoApp:
             return
         games = self.game_executables
         if not games:
-            self.game_exes_summary_var.set("Auto-detect (single game)")
+            self.game_exes_summary_var.set("One game, found by Rialto")
         elif len(games) == 1:
             self.game_exes_summary_var.set(f"1 game: {games[0].get('name', games[0].get('exe', '?'))}")
         else:
@@ -2411,7 +3858,18 @@ class RialtoApp:
             if self.current_game_path and not os.path.exists(os.path.join(self.current_game_path, exe)):
                 self.update_status(f"⚠️ Games on Disc: '{exe}' not found in game folder - skipped")
                 continue
-            valid.append({"name": name, "exe": exe})
+            entry = {"name": name, "exe": exe}
+            # The Play page's picture and line (1.5.1, B9), only when set, so a
+            # 1.5.0 profile writes the menu_config.json it always wrote.
+            icon = str(game.get("icon") or "").strip().replace("\\", "/")
+            if (icon and self.current_game_path and not os.path.isabs(icon)
+                    and ".." not in icon.split("/")
+                    and os.path.isfile(os.path.join(self.current_game_path, icon))):
+                entry["icon"] = icon
+            blurb = sanitize_text(game.get("blurb") or "").strip()[:140]
+            if blurb:
+                entry["blurb"] = blurb
+            valid.append(entry)
         return valid
 
     def discover_game_exes(self):
@@ -2444,23 +3902,59 @@ class RialtoApp:
                 results.append(rel_path.replace("\\", "/"))
         return results
 
+    GAME_PICTURES = ("icon.ico", "icon.png", "cover.png", "cover.jpg")
+
+    def games_in_subfolders(self, base):
+        """One game per sub-folder (1.5.1, B9): a demo disc is a folder of game folders.
+
+        Each sub-folder's exe is found the way a single-game disc's is, its
+        label is the folder's name, and an icon or cover image beside it is its
+        picture on the Play page. Folders that never hold a game (menu, bonus,
+        mods, redistributables) and folders with no exe are passed over.
+        """
+        games = []
+        try:
+            names = sorted(os.listdir(base), key=str.casefold)
+        except OSError:
+            return games
+        for name in names:
+            folder = os.path.join(base, name)
+            if (name.startswith(".") or name.lower() in self.NON_GAME_DIRS
+                    or not os.path.isdir(folder) or os.path.islink(folder)):
+                continue
+            exe = self.detect_primary_game_exe(folder)
+            if not exe:
+                continue
+            entry = {"name": name, "exe": name + "/" + exe}
+            for picture in self.GAME_PICTURES:
+                if os.path.isfile(os.path.join(folder, picture)):
+                    entry["icon"] = name + "/" + picture
+                    break
+            games.append(entry)
+        return games
+
     def configure_game_exes(self):
-        """Dialog to pick which game EXEs appear in the disc menu (multi-game discs)."""
+        """Dialog to pick which games the disc menu offers (a disc of several games).
+
+        1.5.1 (B9): a demo disc is usually a folder of game folders, so one
+        click finds the game in each, with its folder's name and picture. Rows
+        can be reordered, given a line for the Play page, or pointed at another
+        exe by hand. Its own window, so the main window never grows.
+        """
         if not self.current_game_path:
-            self.show_centered_popup("Select Game Folder", "Browse to your game folder first, then configure the games on the disc.")
+            self.show_centered_popup("Select Game Folder", "Browse for your game folder first, then add the games.")
             return
 
         discovered = self.discover_game_exes()
-        configured = {g.get("exe", "").replace("\\", "/"): g.get("name", "") for g in self.game_executables}
-        # Keep configured entries even if the scan missed them
-        all_exes = list(dict.fromkeys(list(configured.keys()) + discovered))
-        all_exes = [e for e in all_exes if e]
+        configured = {str(g.get("exe", "")).replace("\\", "/"): g
+                      for g in self.game_executables if isinstance(g, dict)}
+        all_exes = [e for e in dict.fromkeys(list(configured) + discovered) if e]
 
         theme = self.current_theme()
         dialog, body = self.themed_dialog(
             "Games on Disc",
             "One disc, as many games as you like",
-            width=680, height=560)
+            width=820, height=600)
 
         # Packed first, against the bottom, so a long list of executables cannot
         # push Save off the window.
@@ -2468,88 +3962,793 @@ class RialtoApp:
         button_row.pack(side="bottom", fill="x", padx=12, pady=(4, 12))
 
         tk.Label(body, bg=theme["bg"], fg=theme["fg"], justify="left", anchor="w",
-                 text=("Double-click a row to put that game on the disc. Pick two or more and players\n"
-                       "get a 'choose your game' screen. Leave everything unchecked and Rialto finds\n"
-                       "the game by itself, which is what a normal single-game disc wants."),
+                 text=("One game? Leave every row unticked. Rialto finds it by itself.\n"
+                       "Two or more? Double-click each game to tick it. Players pick one from Play Games.\n"
+                       "Each game in its own folder? Click Find a game in each folder."),
                  font=("Segoe UI", 10)).pack(fill="x", padx=12, pady=(10, 6))
 
         self.style_treeview(theme)
-        columns = ("include", "name", "exe")
+        columns = ("include", "name", "exe", "about")
         tree = ttk.Treeview(body, columns=columns, show="headings", height=10,
                             style="Rialto.Treeview")
-        tree.heading("include", text="On Disc?")
-        tree.heading("name", text="Menu Label (double-click ✔ to toggle)")
-        tree.heading("exe", text="Executable")
+        tree.heading("include", text="In Menu")
+        tree.heading("name", text="Name")
+        tree.heading("exe", text="Program (.exe)")
+        tree.heading("about", text="One line about it")
         tree.column("include", width=70, anchor="center")
-        tree.column("name", width=220)
-        tree.column("exe", width=280)
+        tree.column("name", width=170)
+        tree.column("exe", width=260)
+        tree.column("about", width=250)
         tree.pack(fill="both", expand=True, padx=12, pady=4)
 
-        row_state = {}
-        for exe in all_exes:
-            included = exe in configured
-            name = configured.get(exe) or os.path.splitext(os.path.basename(exe))[0]
-            item = tree.insert("", "end", values=("✔" if included else "", name, exe))
+        row_state, row_icon = {}, {}
+
+        def add_row(exe, name, about="", icon="", included=False):
+            item = tree.insert("", "end", values=("✔" if included else "", name, exe, about))
             row_state[item] = included
+            row_icon[item] = icon
+            return item
+
+        for exe in all_exes:
+            game = configured.get(exe) or {}
+            add_row(exe, game.get("name") or os.path.splitext(os.path.basename(exe))[0],
+                    game.get("blurb", ""), game.get("icon", ""), exe in configured)
+
+        def set_included(item, included):
+            row_state[item] = included
+            values = list(tree.item(item, "values"))
+            values[0] = "✔" if included else ""
+            tree.item(item, values=values)
 
         def toggle(event=None):
             item = tree.focus()
-            if not item:
-                return
-            row_state[item] = not row_state[item]
-            values = list(tree.item(item, "values"))
-            values[0] = "✔" if row_state[item] else ""
-            tree.item(item, values=values)
+            if item:
+                set_included(item, not row_state[item])
 
         tree.bind("<Double-1>", toggle)
         tree.bind("<space>", toggle)
+        ToolTip(tree, "Double-click a game, or select it and press Space, to tick or untick it. A ticked game "
+                      "is on the disc menu. Every file in your game folder goes on the disc either way.")
 
-        # Rename selected entry
-        rename_row = tk.Frame(body, bg=theme["bg"])
-        rename_row.pack(fill="x", padx=12, pady=4)
-        tk.Label(rename_row, text="Menu label:", bg=theme["bg"], fg=theme["fg"]).pack(side="left")
+        # The selected row's label and its line on the Play page
+        edit_row = tk.Frame(body, bg=theme["bg"])
+        edit_row.pack(fill="x", padx=12, pady=4)
+        tk.Label(edit_row, text="Name:", bg=theme["bg"], fg=theme["fg"]).pack(side="left")
         rename_var = tk.StringVar()
-        rename_entry = ttk.Entry(rename_row, textvariable=rename_var)
-        rename_entry.pack(side="left", fill="x", expand=True, padx=6)
+        rename_entry = ttk.Entry(edit_row, textvariable=rename_var, width=22)
+        rename_entry.pack(side="left", padx=6)
+        ToolTip(rename_entry, "The selected game's name on the disc menu and the Choose Your Game page. "
+                              "Click Apply to keep it.")
+        tk.Label(edit_row, text="One line:", bg=theme["bg"], fg=theme["fg"]).pack(side="left")
+        about_var = tk.StringVar()
+        about_entry = ttk.Entry(edit_row, textvariable=about_var)
+        about_entry.pack(side="left", fill="x", expand=True, padx=6)
+        ToolTip(about_entry, "One line under the game's name on the Choose Your Game page, such as its genre "
+                             "or how long a demo lasts. Up to 140 characters. Click Apply to keep it.")
 
-        def load_selected_name(event=None):
+        def load_selected(event=None):
             item = tree.focus()
             if item:
-                rename_var.set(tree.item(item, "values")[1])
+                _included, name, _exe, about = tree.item(item, "values")
+                rename_var.set(name)
+                about_var.set(about)
 
-        def apply_name():
+        def apply_text():
             item = tree.focus()
-            if item and rename_var.get().strip():
-                values = list(tree.item(item, "values"))
-                values[1] = rename_var.get().strip()
-                tree.item(item, values=values)
+            if not item:
+                return
+            values = list(tree.item(item, "values"))
+            if sanitize_text(rename_var.get()).strip():
+                values[1] = sanitize_text(rename_var.get()).strip()[:80]
+            values[3] = sanitize_text(about_var.get()).strip()[:140]
+            tree.item(item, values=values)
 
-        tree.bind("<<TreeviewSelect>>", load_selected_name)
-        ttk.Button(rename_row, text="Apply", command=apply_name, style="Rounded.TButton").pack(side="left")
+        tree.bind("<<TreeviewSelect>>", load_selected)
+        apply_button = ttk.Button(edit_row, text="Apply", command=apply_text, style="Rounded.TButton")
+        apply_button.pack(side="left")
+        ToolTip(apply_button, "Keeps the Name and One line typed here for the selected game.")
+
+        # Folders, order, and an exe picked by hand
+        tools_row = tk.Frame(body, bg=theme["bg"])
+        tools_row.pack(fill="x", padx=12, pady=4)
+
+        def find_per_folder():
+            found = self.games_in_subfolders(self.current_game_path)
+            if not found:
+                self.show_centered_popup(
+                    "No game folders found",
+                    "Rialto found no folder with a game in it. Put each game in a folder of its own "
+                    "inside your game folder, then try again.")
+                return
+            by_exe = {tree.item(i, "values")[2]: i for i in tree.get_children()}
+            for position, game in enumerate(found):
+                item = by_exe.get(game["exe"])
+                if item is None:
+                    item = add_row(game["exe"], game["name"], icon=game.get("icon", ""))
+                else:
+                    # A row the scan listed under its exe's name takes the
+                    # folder's; one already on the disc keeps the author's label.
+                    if not row_state.get(item):
+                        values = list(tree.item(item, "values"))
+                        values[1] = game["name"]
+                        tree.item(item, values=values)
+                    if not row_icon.get(item):
+                        row_icon[item] = game.get("icon", "")
+                set_included(item, True)
+                tree.move(item, "", position)
+            self.update_status(f"🎮 Games on Disc: found a game in {len(found)} folders")
+
+        def move(step):
+            item = tree.focus()
+            if item:
+                tree.move(item, "", max(0, tree.index(item) + step))
+                tree.see(item)
+
+        def pick_exe():
+            item = tree.focus()
+            if not item:
+                self.show_centered_popup("Pick a row first", "Select the game whose exe you want to change, then pick its exe.")
+                return
+            base = os.path.realpath(self.current_game_path)
+            chosen = filedialog.askopenfilename(parent=dialog, title="Pick the game's exe",
+                                                initialdir=base, filetypes=[("Programs", "*.exe")])
+            if not chosen:
+                return
+            chosen = os.path.realpath(chosen)
+            try:
+                inside = os.path.commonpath([base, chosen]) == base and chosen != base
+            except ValueError:
+                inside = False
+            if not inside:
+                self.show_centered_popup(
+                    "Outside the game folder",
+                    "The exe has to be inside your game folder, because that folder is what goes on the disc.")
+                return
+            values = list(tree.item(item, "values"))
+            values[2] = os.path.relpath(chosen, base).replace("\\", "/")
+            tree.item(item, values=values)
+            set_included(item, True)
+
+        for text, command, tip in (
+                ("Find a game in each folder", find_per_folder,
+                 "For a demo disc: each folder inside your game folder holding a game becomes a row, "
+                 "named after the folder, with an icon.ico, icon.png, cover.png or cover.jpg in it as its picture."),
+                ("Move Up", lambda: move(-1), "The Choose Your Game page lists games in this order. "
+                                              "The main menu lists them A to Z."),
+                ("Move Down", lambda: move(1), "The Choose Your Game page lists games in this order. "
+                                               "The main menu lists them A to Z."),
+                ("Pick the exe…", pick_exe, "Start the selected game with a different exe from inside your game folder.")):
+            button = ttk.Button(tools_row, text=text, command=command, style="Rounded.TButton")
+            button.pack(side="left", padx=(0, 6))
+            ToolTip(button, tip)
+
+        shortcuts_var = tk.BooleanVar(value=bool(self.game_shortcuts))
+        shortcuts_check = self.themed_check(
+            body, "A Start Menu shortcut for each game", shortcuts_var,
+            surface="dialog", anchor="w", padx=12, pady=(2, 0))
+        ToolTip(shortcuts_check, "Besides the shortcut to the disc menu, one per game, so players can start "
+                                 "a game straight from the Start Menu. Only for two or more games.")
 
         def save_and_close():
+            apply_text()
             games = []
             for item in tree.get_children():
                 if row_state.get(item):
-                    _include, name, exe = tree.item(item, "values")
-                    games.append({"name": name, "exe": exe})
+                    _include, name, exe, about = tree.item(item, "values")
+                    game = {"name": name, "exe": exe}
+                    if row_icon.get(item):
+                        game["icon"] = row_icon[item]
+                    if about:
+                        game["blurb"] = about
+                    games.append(game)
             self.game_executables = games
+            self.game_shortcuts = bool(shortcuts_var.get())
             self.refresh_game_exes_summary()
             if games:
-                self.update_status(f"🎮 Games on Disc: {len(games)} configured")
+                self.update_status(f"🎮 Games on Disc: {len(games)} on the menu")
             else:
-                self.update_status("🎮 Games on Disc: auto-detect (single game)")
+                self.update_status("🎮 Games on Disc: one game, found by Rialto")
             dialog.destroy()
 
         def clear_and_close():
             self.game_executables = []
             self.refresh_game_exes_summary()
-            self.update_status("🎮 Games on Disc: auto-detect (single game)")
+            self.update_status("🎮 Games on Disc: one game, found by Rialto")
             dialog.destroy()
 
         ttk.Button(button_row, text="Save", command=save_and_close, style="Primary.TButton").pack(side="right", padx=4)
-        ttk.Button(button_row, text="Use Auto-Detect", command=clear_and_close, style="Rounded.TButton").pack(side="right", padx=4)
+        auto_button = ttk.Button(button_row, text="Let Rialto Find It", command=clear_and_close, style="Rounded.TButton")
+        auto_button.pack(side="right", padx=4)
+        ToolTip(auto_button, "Unticks every game and closes, so Rialto finds the one game by itself, "
+                             "as on a normal single-game disc.")
         ttk.Button(button_row, text="Cancel", command=dialog.destroy, style="Rounded.TButton").pack(side="right", padx=4)
+        self.fit_dialog_to_screen(dialog, 820)
+
+    def stage_placed_files(self, output_path):
+        """Copy each file or folder to place on the PC into ..\\.rialto-placed\\<n>\\.
+
+        Written fresh every build, with a manifest the installer script reads,
+        so an earlier build's files never ride along. A source that is gone
+        stops nothing: it is reported and left out.
+        """
+        staging = placed_files_root(output_path)
+        shutil.rmtree(staging, ignore_errors=True)
+        rows = [r for r in getattr(self, "placed_files", []) if isinstance(r, dict)]
+        manifest = []
+        game = getattr(self, "current_game_path", "") or ""
+        base = os.path.realpath(game) if game else ""
+        for number, row in enumerate(rows, start=1):
+            source = str(row.get("source") or "")
+            target = os.path.join(staging, str(number))
+            problem = placed_row_problem(row, game)
+            if problem:
+                self.update_status(f"⚠️ Files to place: {source} left out, because {problem}")
+                continue
+            outside_app = row.get("place") != "The install folder"
+
+            def skip(folder, names, outside_app=outside_app):
+                # Inside a folder: no link or junction is followed out of the game
+                # folder, and outside {app} no program, script or shortcut goes.
+                skipped = []
+                for entry in names:
+                    full = os.path.join(folder, entry)
+                    real = os.path.realpath(full)
+                    try:
+                        escapes = os.path.commonpath([real, base]) != base
+                    except ValueError:
+                        escapes = True
+                    if (os.path.islink(full) or escapes
+                            or (outside_app and os.path.isfile(full) and placed_file_refused(entry))):
+                        skipped.append(entry)
+                        self.update_status(f"⚠️ Files to place: {full} left out")
+                return skipped
+            try:
+                if os.path.isdir(source):
+                    shutil.copytree(source, target, ignore=skip)
+                    name = ""
+                elif os.path.isfile(source):
+                    os.makedirs(target, exist_ok=True)
+                    name = os.path.basename(source)
+                    shutil.copy2(source, os.path.join(target, name))
+                else:
+                    self.update_status(f"⚠️ Files to place: not found, left out: {source}")
+                    continue
+            except OSError as e:
+                self.update_status(f"⚠️ Files to place: could not copy {source}: {e}")
+                continue
+            manifest.append({"n": number, "name": name, "place": row.get("place"),
+                             "subfolder": row.get("subfolder", ""),
+                             "keep": bool(row.get("keep", True)), "remove": bool(row.get("remove", False))})
+            self.update_status(f"📁 Will place on the player's PC: {source} to {row.get('place')}"
+                               + (f"\\{placed_subfolder(row.get('subfolder'))}" if row.get("subfolder") else ""))
+        # Always written, empty or not, so a manifest an earlier build left
+        # behind is never read again.
+        os.makedirs(staging, exist_ok=True)
+        with open(os.path.join(staging, "placed.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        if manifest:
+            self.update_status(f"✅ Staged {len(manifest)} item(s) to place on the player's PC")
+        return manifest
+
+    def configure_placed_files(self):
+        """Files to Place on the PC (1.5.1, B10): its own window, opened from Disc Extras and the Disc menu.
+
+        For a game that needs files it would make on its first run, like a
+        mod's config or a pre-seeded save: rows of "this file or folder" to
+        "this place on the player's PC". Copying only, no commands.
+        """
+        theme = self.current_theme()
+        dialog, body = self.themed_dialog(
+            "Files to Place on the PC",
+            "Saves, settings or a mod's first-run files, copied where the game looks for them",
+            width=800, height=560)
+        button_row = tk.Frame(body, bg=theme["bg"])
+        button_row.pack(side="bottom", fill="x", padx=12, pady=(4, 12))
+
+        tk.Label(body, bg=theme["bg"], fg=theme["fg"], justify="left", anchor="w", font=("Segoe UI", 10),
+                 text=("Add a file or a folder, then pick where the installer copies it on the player's PC.\n"
+                       "A file already there stays as it is unless you untick Keep existing, so saves are safe.\n"
+                       "Placed files stay after an uninstall unless you tick Remove on uninstall.")
+                 ).pack(fill="x", padx=12, pady=(10, 6))
+
+        self.style_treeview(theme)
+        tree = ttk.Treeview(body, columns=("source", "dest", "keep", "remove"), show="headings",
+                            height=8, style="Rialto.Treeview")
+        for column, text, width in (("source", "From your PC", 270), ("dest", "To the player's PC", 250),
+                                    ("keep", "Keep existing", 90), ("remove", "Remove on uninstall", 130)):
+            tree.heading(column, text=text)
+            tree.column(column, width=width, anchor="center" if column in ("keep", "remove") else "w")
+        tree.pack(fill="both", expand=True, padx=12, pady=4)
+        ToolTip(tree, "Each row is a file or folder from your game and where the installer copies it. "
+                      "Select a row to change it below, then click Apply.")
+
+        rows = {}
+
+        def shown(row):
+            dest = row["place"] + ("\\" + row["subfolder"] if row.get("subfolder") else "")
+            return (row["source"], dest, "✔" if row.get("keep", True) else "", "✔" if row.get("remove") else "")
+
+        def add(row):
+            item = tree.insert("", "end", values=shown(row))
+            rows[item] = row
+            return item
+
+        for row in self.placed_files:
+            if isinstance(row, dict) and row.get("source"):
+                add({"source": row["source"], "place": row.get("place", "Documents"),
+                     "subfolder": row.get("subfolder", ""), "keep": bool(row.get("keep", True)),
+                     "remove": bool(row.get("remove", False))})
+
+        edit = tk.Frame(body, bg=theme["bg"])
+        edit.pack(fill="x", padx=12, pady=4)
+        tk.Label(edit, text="Place:", bg=theme["bg"], fg=theme["fg"]).pack(side="left")
+        place_var = tk.StringVar(value="Documents")
+        place_box = ttk.Combobox(edit, textvariable=place_var, state="readonly", width=18,
+                                 values=[label for label, _const in PLACED_FILE_PLACES])
+        place_box.pack(side="left", padx=6)
+        ToolTip(place_box, "Where on the player's PC the installer copies the selected file or folder. "
+                           "Click Apply to keep it.")
+        tk.Label(edit, text="Sub-folder:", bg=theme["bg"], fg=theme["fg"]).pack(side="left")
+        sub_var = tk.StringVar()
+        sub_entry = ttk.Entry(edit, textvariable=sub_var, width=24)
+        sub_entry.pack(side="left", padx=6)
+        ToolTip(sub_entry, "Typed as the game expects it, such as MyStudio\\MyGame or My Games\\Rocket Pals. "
+                           "Created on the player's PC if it is not there.")
+        keep_var = tk.BooleanVar(value=True)
+        remove_var = tk.BooleanVar(value=False)
+        keep_check = self.themed_check(edit, "Keep existing", keep_var, surface="dialog", side="left", padx=(6, 0))
+        ToolTip(keep_check, "Never replace a file that is already on the player's PC, such as a save.")
+        remove_check = self.themed_check(edit, "Remove on uninstall", remove_var, surface="dialog", side="left", padx=(6, 0))
+        ToolTip(remove_check, "Delete these files when the game is uninstalled. Leave it off for saves.")
+
+        def selected():
+            item = tree.focus()
+            return item if item in rows else None
+
+        def load(event=None):
+            item = selected()
+            if item:
+                row = rows[item]
+                place_var.set(row["place"])
+                sub_var.set(row.get("subfolder", ""))
+                keep_var.set(row.get("keep", True))
+                remove_var.set(row.get("remove", False))
+
+        def apply():
+            item = selected()
+            if not item:
+                return
+            row = rows[item]
+            row.update(place=place_var.get(), subfolder=placed_subfolder(sub_var.get()),
+                       keep=bool(keep_var.get()), remove=bool(remove_var.get()))
+            sub_var.set(row["subfolder"])
+            tree.item(item, values=shown(row))
+
+        tree.bind("<<TreeviewSelect>>", load)
+        apply_button = ttk.Button(edit, text="Apply", command=apply, style="Rounded.TButton")
+        apply_button.pack(side="left", padx=6)
+        ToolTip(apply_button, "Keeps the Place, Sub-folder and tick boxes set here for the selected row.")
+
+        tools = tk.Frame(body, bg=theme["bg"])
+        tools.pack(fill="x", padx=12, pady=4)
+
+        def add_path(path):
+            if not path:
+                return
+            row = {"source": os.path.normpath(path), "place": place_var.get(),
+                   "subfolder": placed_subfolder(sub_var.get()), "keep": bool(keep_var.get()),
+                   "remove": bool(remove_var.get())}
+            problem = placed_row_problem(row, self.current_game_path or "")
+            if problem:
+                self.show_centered_popup(
+                    "This cannot be placed",
+                    f"{row['source']} cannot be placed, because {problem}.\n\nPut the files in a folder "
+                    "inside your game folder, and keep programs, scripts and shortcuts for the install folder.")
+                return
+            item = add(row)
+            tree.focus(item)
+            tree.selection_set(item)
+
+        def remove_row():
+            item = selected()
+            if item:
+                tree.delete(item)
+                rows.pop(item, None)
+
+        for text, command, tip in (
+                ("Add a File…", lambda: add_path(filedialog.askopenfilename(
+                    parent=dialog, title="Pick a file to place on the PC", initialdir=self.current_game_path or INPUT_DIR)),
+                 "Pick one file from inside your game folder. It is added with the Place and tick boxes set above."),
+                ("Add a Folder…", lambda: add_path(filedialog.askdirectory(
+                    parent=dialog, title="Pick a folder to place on the PC", initialdir=self.current_game_path or INPUT_DIR)),
+                 "Pick a folder from inside your game folder. Everything in it is placed, with the Place and "
+                 "tick boxes set above."),
+                ("Remove from List", remove_row,
+                 "Takes the selected row off this list. Nothing is deleted from your PC.")):
+            button = ttk.Button(tools, text=text, command=command, style="Rounded.TButton")
+            button.pack(side="left", padx=(0, 6))
+            ToolTip(button, tip)
+        tk.Label(tools, bg=theme["bg"], fg=theme["disabled_fg"], font=("Segoe UI", 9),
+                 text="From inside your game folder. A folder goes with everything in it.").pack(side="left", padx=6)
+
+        def save_and_close():
+            apply()
+            self.placed_files = [dict(rows[item]) for item in tree.get_children() if item in rows]
+            self.update_status(f"📁 Files to place on the PC: {len(self.placed_files)}")
+            dialog.destroy()
+
+        ttk.Button(button_row, text="Save", command=save_and_close, style="Primary.TButton").pack(side="right", padx=4)
+        ttk.Button(button_row, text="Cancel", command=dialog.destroy, style="Rounded.TButton").pack(side="right", padx=4)
+        self.fit_dialog_to_screen(dialog, 800)
+        # Disc Extras opens this over itself and takes its grab back when it closes.
+        return dialog
+
+    # === Rialto 1.5.1: the Build Queue (B1) ===
+
+    def batch_answer(self, title, message, kind):
+        """A popup during a Build Queue run: logged, and answered as the queue was set (B1).
+
+        The whole popup goes in the log, its lines joined (1.5.1, end-to-end runs): a pressed disc's
+        "Sign Final Build is off" warning sits after the first line, and was lost.
+        """
+        first = " ".join(line.strip() for line in message.splitlines() if line.strip())
+        if kind == "yesno":
+            answer = title == "Something is missing" and bool(self._batch.get("skip_missing", True))
+            self.update_status(f"📋 {title}: {first} ({'yes' if answer else 'no'}, as the queue was set)")
+            return answer
+        self.update_status(f"📋 {title}: {first}")
+        return True
+
+    def queue_row_result(self, name, installers_only=False):
+        """What a finished row made, for the summary: each image and its size, or where the installer is."""
+        output = os.path.join(OUTPUT_DIR, name)
+        if installers_only:
+            return "installer and disc files in output\\%s" % name
+        # The images the build made (create_iso's images_made), never a half-written one lying in the folder.
+        made = getattr(self, "images_made", None)
+        images = sorted(p for p in made if os.path.isfile(p)) if made is not None \
+            else sorted(glob.glob(os.path.join(output, "*.iso")))
+        if not images:
+            return "no disc image was made"
+        return ", ".join("%s (%.2f GB)" % (os.path.basename(i), os.path.getsize(i) / 1e9) for i in images)
+
+    def run_build_queue(self, rows, installers_only=False, skip_missing=True, on_row=None, should_stop=None):
+        """Build every ticked row, one after another (1.5.1, B1).
+
+        The real build, not a copy of it: each row's game folder is set and its
+        profile put on the form the way Load Profile does it, then the normal
+        build runs. Its popups become log lines, answered as the queue was set;
+        the signing pause is never offered. A failed row is marked with its
+        reason and the queue moves on. The author's own form comes back after.
+        Returns [(row, True / False / None for not started, detail)].
+        """
+        results = []
+        snapshot = self.current_profile_data()
+        snapshot_game = self.current_game_path
+        snapshot_auto_copyright = getattr(self, "_auto_copyright", None)
+        self._batch = {"installers_only": installers_only, "skip_missing": skip_missing, "lines": []}
+        self._queue_running = True
+        taken = {}
+
+        def record(row, ok, detail):
+            results.append((row, ok, detail))
+            if on_row:
+                on_row(row, ok, detail)
+
+        try:
+            # The tools (1.5.1, B12.2), asked once for the run, not once a row: with no installer compiler,
+            # or no disc image tool when the queue makes discs, no row can build. Said once, then each row.
+            missing = missing_tool_refusals(False, not installers_only)
+            if missing:
+                for line in missing:
+                    self.update_status("❌ Build Queue: " + line)
+                reason = "not built: " + "; ".join(line.split(":")[0].lower() for line in missing) + " (see the log)"
+                for row in rows:
+                    if row.get("run", True):
+                        record(row, False, reason)
+                return results
+            for number, row in enumerate(rows, start=1):
+                if not row.get("run", True):
+                    continue
+                if should_stop and should_stop():
+                    record(row, None, "not started: the queue was stopped")
+                    continue
+                folder = str(row.get("folder") or "")
+                name = os.path.basename(os.path.normpath(folder)) if folder else ""
+                if any(str(v).startswith(("\\\\", "//")) for v in (row.get("profile") or "", folder)):
+                    # A shared queue naming a network share would hand the
+                    # author's Windows sign-in to that server (security review).
+                    record(row, False, "a row on a network share is not built; copy it to this PC")
+                    continue
+                if not os.path.isfile(str(row.get("profile") or "")):
+                    record(row, False, "the profile file is not there any more")
+                    continue
+                if not os.path.isdir(folder):
+                    record(row, False, "the game folder is not there any more")
+                    continue
+                if name.lower() in taken:
+                    record(row, False, "its game folder has the same name as row %d's, and both would build "
+                                       "into output\\%s" % (taken[name.lower()], name))
+                    continue
+                taken[name.lower()] = number
+                if on_row:
+                    on_row(row, "building", "")
+                self._batch["lines"] = []
+                self.update_status(f"📋 Build Queue, row {number}: {os.path.basename(row['profile'])} with {folder}")
+                self.current_game_path = folder
+                if hasattr(self, "game_path_var"):
+                    self.game_path_var.set(folder)
+                built = self.apply_profile_file(row["profile"], remember=False) and self.run_build_process()
+                if built:
+                    record(row, True, self.queue_row_result(name, installers_only))
+                else:
+                    reasons = [line for line in self._batch["lines"] if line.startswith(("❌", "📋 Preflight Check Failed"))]
+                    record(row, False, reasons[-1].lstrip("❌📋 ").strip() if reasons else "the build stopped")
+                self.keep_window_alive()
+        finally:
+            self._batch = None
+            self._queue_running = False
+            self.restore_form(snapshot, snapshot_game)
+            if snapshot_auto_copyright:
+                self._auto_copyright = True
+                try:
+                    self._regenerate_copyright()
+                except (tk.TclError, AttributeError):
+                    pass
+            self.close_if_asked()  # after the author's own form is back, so the session saves it
+        return results
+
+    def restore_form(self, profile_data, game_path):
+        """Put the author's own form back after a queue (B1)."""
+        try:
+            handle, path = tempfile.mkstemp(suffix=".json", prefix="rialto_form_")
+            with os.fdopen(handle, "w", encoding="utf-8") as f:
+                json.dump(profile_data, f)
+            self.current_game_path = game_path
+            if hasattr(self, "game_path_var"):
+                self.game_path_var.set(game_path or "")
+            self.apply_profile_file(path, remember=False)
+            os.remove(path)
+        except (OSError, tk.TclError):
+            pass
+
+    def queue_summary(self, results):
+        """The end-of-queue summary: one line per row."""
+        made = sum(1 for _row, ok, _detail in results if ok)
+        lines = ["Build Queue: %d of %d made." % (made, len(results))]
+        for row, ok, detail in results:
+            title = row.get("title") or os.path.basename(str(row.get("profile") or ""))
+            lines.append("%s %s: %s" % ({True: "✅", False: "❌", None: "⏭️"}[ok], title, detail))
+        return lines
+
+    def configure_build_queue(self):
+        """The Build Queue (1.5.1, B1): many games, many discs, one run. Its own window, opened from Step 1 (beside Browse) and the Disc menu."""
+        theme = self.current_theme()
+        dialog, body = self.themed_dialog(
+            "Build Queue", "Queue up your games and get every disc in one run", width=860, height=560)
+        button_row = tk.Frame(body, bg=theme["bg"])
+        button_row.pack(side="bottom", fill="x", padx=12, pady=(4, 12))
+        tk.Label(body, bg=theme["bg"], fg=theme["fg"], justify="left", anchor="w", font=("Segoe UI", 10),
+                 text=("Add a saved profile and the game folder it builds. Rialto builds each ticked row in turn, "
+                       "exactly as\nBUILD GAME INSTALLER would, and tells you at the end what it made. Double-click a "
+                       "row to tick or untick it.")).pack(fill="x", padx=12, pady=(10, 6))
+
+        self.style_treeview(theme)
+        tree = ttk.Treeview(body, columns=("run", "title", "folder", "media", "status"), show="headings",
+                            height=9, style="Rialto.Treeview")
+        # Target Media wide enough for "Mini DVD 1.4 GB (8 cm)" (1.5.1, minis),
+        # taken from the folder, which is cut short whatever its width.
+        for column, text, width in (("run", "Build?", 60), ("title", "Game", 160), ("folder", "Game folder", 220),
+                                    ("media", "Target Media", 160), ("status", "Status", 220)):
+            tree.heading(column, text=text)
+            tree.column(column, width=width, anchor="center" if column == "run" else "w")
+        tree.pack(fill="both", expand=True, padx=12, pady=4)
+        ToolTip(tree, "Each row is one disc: a saved profile and the game folder it builds. Double-click a row, "
+                      "or select it and press Space, to tick or untick it.")
+        rows = {}
+
+        def describe(profile):
+            if str(profile).startswith(("\\\\", "//")):
+                return os.path.basename(str(profile)), "?"  # never opened: a network share
+            try:
+                with open(profile, encoding="utf-8") as f:
+                    data = sanitize_profile_data(json.load(f))
+                return str(data.get("Title") or os.path.basename(profile)), str(data.get("TargetMedia") or "Auto (single disc)")
+            except (OSError, ValueError):
+                return os.path.basename(profile), "?"
+
+        def shown(row):
+            return ("✔" if row.get("run", True) else "", row["title"], row["folder"], row["media"], row.get("status", "Waiting"))
+
+        def add(row):
+            row.setdefault("run", True)
+            row["title"], row["media"] = describe(row["profile"])
+            item = tree.insert("", "end", values=shown(row))
+            rows[item] = row
+            return item
+
+        def refresh(item):
+            if tree.winfo_exists():
+                tree.item(item, values=shown(rows[item]))
+
+        def selected():
+            item = tree.focus()
+            return item if item in rows else None
+
+        def add_profile():
+            profile = filedialog.askopenfilename(parent=dialog, title="Pick a saved profile",
+                                                 initialdir=TEMPLATES_DIR, filetypes=[("Rialto profiles", "*.json")])
+            if not profile:
+                return
+            folder = filedialog.askdirectory(parent=dialog, title="Pick the game folder this profile builds",
+                                             initialdir=INPUT_DIR)
+            if folder:
+                add({"profile": os.path.normpath(profile), "folder": os.path.normpath(folder)})
+
+        def change_folder():
+            item = selected()
+            if item:
+                folder = filedialog.askdirectory(parent=dialog, title="Pick the game folder this profile builds",
+                                                 initialdir=rows[item]["folder"] or INPUT_DIR)
+                if folder:
+                    rows[item]["folder"] = os.path.normpath(folder)
+                    refresh(item)
+
+        def toggle(event=None):
+            item = selected()
+            if item:
+                rows[item]["run"] = not rows[item].get("run", True)
+                refresh(item)
+
+        def remove():
+            item = selected()
+            if item:
+                tree.delete(item)
+                rows.pop(item, None)
+
+        def move(step):
+            item = selected()
+            if item:
+                tree.move(item, "", max(0, tree.index(item) + step))
+
+        tree.bind("<Double-1>", toggle)
+        tree.bind("<space>", toggle)
+
+        tools = tk.Frame(body, bg=theme["bg"])
+        tools.pack(fill="x", padx=12, pady=4)
+        editing = []
+        for text, command, tip in (
+                ("Add a Profile…", add_profile,
+                 "Pick a saved profile, then the game folder it builds. Each pair is one row, one disc."),
+                ("Change Game Folder…", change_folder, "Point the selected row at a different game folder."),
+                ("Remove", remove, "Takes the selected row out of the queue. The profile file stays where it is."),
+                ("Move Up", lambda: move(-1), "The queue builds from the top down."),
+                ("Move Down", lambda: move(1), "The queue builds from the top down.")):
+            button = ttk.Button(tools, text=text, command=command, style="Rounded.TButton")
+            button.pack(side="left", padx=(0, 6))
+            ToolTip(button, tip)
+            editing.append(button)
+
+        options = tk.Frame(body, bg=theme["bg"])
+        options.pack(fill="x", padx=12, pady=(2, 0))
+        installers_only = tk.BooleanVar(value=False)
+        skip_missing = tk.BooleanVar(value=True)
+        only_check = self.themed_check(options, "Installers only, no disc images", installers_only,
+                                       surface="dialog", side="left", padx=(0, 18))
+        ToolTip(only_check, "Stops each build once setup.exe is made, leaving the disc's files in the output "
+                            "folder. Quicker when you only need the installers.")
+        skip_check = self.themed_check(options, "If an extra folder is missing, build without it", skip_missing,
+                                       surface="dialog", side="left")
+        ToolTip(skip_check, "Unticked, a row whose bonus, mod or Mac and Linux folder cannot be found fails "
+                            "instead, and the queue moves on. Signing follows Sign Final Build: with signing "
+                            "set up every disc signs itself, and the build never pauses to sign by hand.")
+
+        def queue_rows():
+            return [rows[item] for item in tree.get_children() if item in rows]
+
+        def save_queue():
+            path = filedialog.asksaveasfilename(parent=dialog, title="Save this queue", initialdir=TEMPLATES_DIR,
+                                                initialfile="queue_.json", defaultextension=".json",
+                                                filetypes=[("Build queues", "queue_*.json"), ("JSON", "*.json")])
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"rows": [{k: r[k] for k in ("profile", "folder", "run")} for r in queue_rows()],
+                               "installers_only": installers_only.get(), "skip_missing": skip_missing.get()},
+                              f, indent=2)
+                self.update_status(f"✅ Queue saved: {os.path.basename(path)}")
+
+        def load_queue():
+            path = filedialog.askopenfilename(parent=dialog, title="Load a queue", initialdir=TEMPLATES_DIR,
+                                              filetypes=[("Build queues", "queue_*.json"), ("JSON", "*.json")])
+            if not path:
+                return
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = sanitize_profile_data(json.load(f))
+            except (OSError, ValueError) as e:
+                self.update_status(f"❌ Could not read that queue: {e}")
+                return
+            for item in list(rows):
+                tree.delete(item)
+                rows.pop(item)
+            for row in data.get("rows", []) if isinstance(data, dict) else []:
+                if isinstance(row, dict) and row.get("profile") and row.get("folder"):
+                    add({"profile": str(row["profile"]), "folder": str(row["folder"]), "run": bool(row.get("run", True))})
+            installers_only.set(bool(data.get("installers_only", False)))
+            skip_missing.set(bool(data.get("skip_missing", True)))
+
+        stop = {"asked": False}
+
+        def on_row(row, ok, detail):
+            row["status"] = {"building": "Building…", True: "Done: " + detail, False: "Failed: " + detail,
+                             None: "Not started"}[ok]
+            for item, candidate in rows.items():
+                if candidate is row:
+                    refresh(item)
+
+        def build_all_rows():
+            chosen = queue_rows()
+            if not any(r.get("run", True) for r in chosen):
+                self.update_status("📋 Build Queue: tick at least one row")
+                return
+            stop["asked"] = False
+            stop["running"] = True
+            for widget in editing + [build_button, save_button, load_button, close_button]:
+                widget.configure(state="disabled")
+            stop_button.configure(state="normal")
+            for item in rows:
+                rows[item]["status"] = "Waiting" if rows[item].get("run", True) else "Skipped"
+                refresh(item)
+            try:
+                results = self.run_build_queue(chosen, installers_only.get(), skip_missing.get(),
+                                               on_row=on_row, should_stop=lambda: stop["asked"])
+            except RuntimeError:
+                stop["running"] = False
+                return  # Rialto was closed during the queue
+            stop["running"] = False
+            summary = self.queue_summary(results)
+            for line in summary:
+                self.update_status(line)
+            self.play_completion_jingle()
+            try:
+                for widget in editing + [build_button, save_button, load_button, close_button]:
+                    widget.configure(state="normal")
+                stop_button.configure(state="disabled")
+                self.show_centered_popup("Build Queue", "\n".join(summary))
+            except tk.TclError:
+                pass
+
+        def ask_stop():
+            stop["asked"] = True
+            stop_button.configure(state="disabled")
+            self.update_status("📋 Build Queue: stopping after this one")
+
+        def close_window():
+            # The window's own X while a queue runs would leave the queue with
+            # nothing to report to: it stops after the disc in progress instead.
+            if stop.get("running"):
+                if not stop["asked"]:
+                    ask_stop()
+                return
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_window)
+        close_button = ttk.Button(button_row, text="Close", command=dialog.destroy, style="Rounded.TButton")
+        close_button.pack(side="right", padx=4)
+        build_button = ttk.Button(button_row, text="Build All", command=build_all_rows, style="Primary.TButton")
+        build_button.pack(side="right", padx=4)
+        stop_button = ttk.Button(button_row, text="Stop After This One", command=ask_stop,
+                                 style="Rounded.TButton", state="disabled")
+        stop_button.pack(side="right", padx=4)
+        save_button = ttk.Button(button_row, text="Save Queue…", command=save_queue, style="Rounded.TButton")
+        save_button.pack(side="left", padx=4)
+        load_button = ttk.Button(button_row, text="Load Queue…", command=load_queue, style="Rounded.TButton")
+        load_button.pack(side="left", padx=4)
+        ToolTip(build_button, "Builds every ticked row, one after another, and lists what each one made at the end.")
+        ToolTip(stop_button, "Finishes the disc being built now and leaves the rest of the queue unbuilt.")
+        ToolTip(save_button, "Saves this list of rows to a file, to build the same set again later.")
+        ToolTip(load_button, "Adds the rows of a queue you saved earlier.")
+        self.fit_dialog_to_screen(dialog, 860)
 
     # === Rialto 1.5: disc extras (bonus, mods, Steam button, Mac and Linux) ===
 
@@ -2593,28 +4792,79 @@ class RialtoApp:
         return default if default and os.path.isdir(default) else ""
 
     def configure_disc_extras(self):
-        """Everything a disc can carry beyond the game: bonus, mods, Steam, Mac, Linux."""
+        """Everything a disc can carry beyond the game: bonus, mods, Steam, files for the PC, Mac, Linux."""
         theme = self.current_theme()
+        # Two columns, sized to what they hold (1.5.1, B11): one column of five sections ran off the bottom of a
+        # 1080-line screen, and the lowest controls could not be reached. Never taller than the work area less
+        # its title bar (B13.4), and no scrolling. On a 720-line screen that leaves 640 lines and it asked for
+        # 652, so 16 came out of the padding: 6 round Done, 4 round the lead line, 2 above each section's rule.
         dialog, body = self.themed_dialog(
             "Disc Extras",
             "Everything the disc can carry besides the game itself",
-            width=680, height=990)
+            width=self.DISC_EXTRAS_WIDTH, height=600)
 
         # Packed first, against the bottom, so Done keeps its space no matter
         # how tall the sections below turn out to be.
         button_row = tk.Frame(body, bg=theme["bg"])
-        button_row.pack(side="bottom", fill="x", padx=14, pady=12)
+        button_row.pack(side="bottom", fill="x", padx=14, pady=(8, 10))
         ttk.Button(button_row, text="Done", command=dialog.destroy,
                    style="Primary.TButton").pack(side="right")
+
+        # Files to Place on the PC (his word, 19 Oct 2026: it was only in the Disc menu, and GitHub #3's feature
+        # could not be found). On the Done row, which costs no height: this window is already as tall as a
+        # 672-line screen allows. Its own window still.
+        placed_btn = ttk.Button(button_row, text="Files to Place on the PC\u2026", style="Rounded.TButton",
+                                command=lambda: open_placed_files())
+        placed_btn.pack(side="left")
+        ToolTip(placed_btn, "Saves, settings or a mod's first-run files from your game folder, and where "
+                            "the installer copies each one on the player's PC, such as Documents or Saved "
+                            "Games. Copying only: nothing runs.")
+        placed_note = tk.Label(button_row, bg=theme["bg"], fg=theme["disabled_fg"], anchor="w",
+                               font=("Segoe UI", 9))
+        placed_note.pack(side="left", padx=8)
+
+        def refresh_placed_note():
+            count = len(getattr(self, "placed_files", None) or [])
+            placed_note.configure(text="No files for the player's PC yet." if not count else
+                                  "1 file or folder for the player's PC." if count == 1 else
+                                  "%d files or folders for the player's PC." % count)
+
+        refresh_placed_note()
+
+        def open_placed_files():
+            child = self.configure_placed_files()
+            if child is None:
+                return
+
+            def back(event):
+                # Each window takes the grab when it opens and nothing hands it back, so Disc Extras
+                # takes it again here, with the count brought up to date.
+                if event.widget is child:
+                    try:
+                        refresh_placed_note()
+                        dialog.grab_set()
+                    except tk.TclError:
+                        pass  # Disc Extras was closed first
+
+            child.bind("<Destroy>", back, add="+")
 
         tk.Label(body, bg=theme["bg"], fg=theme["fg"], justify="left", anchor="w",
                  font=("Segoe UI", 10), wraplength=620,
                  text=("All of this is optional. Leave it alone and your disc still builds "
-                       "exactly as it would have.")).pack(fill="x", padx=14, pady=(12, 6))
+                       "exactly as it would have.")).pack(fill="x", padx=14, pady=(10, 4))
+
+        columns = tk.Frame(body, bg=theme["bg"])
+        columns.pack(fill="both", expand=True)
+        left = tk.Frame(columns, bg=theme["bg"])
+        left.pack(side="left", fill="both", expand=True, anchor="n")
+        tk.Frame(columns, bg=theme["button_bg"], width=1).pack(side="left", fill="y", pady=10)
+        right = tk.Frame(columns, bg=theme["bg"])
+        right.pack(side="left", fill="both", expand=True, anchor="n")
+        col = left  # Bonus, Mods and Steam on the left; Compatibility, Mac and Linux on the right (balanced for 1366 x 768)
 
         def section(title):
-            tk.Frame(body, bg=theme["button_bg"], height=1).pack(fill="x", padx=14, pady=(10, 0))
-            tk.Label(body, text=title, bg=theme["bg"], fg=theme["fg"], anchor="w",
+            tk.Frame(col, bg=theme["button_bg"], height=1).pack(fill="x", padx=14, pady=(8, 0))
+            tk.Label(col, text=title, bg=theme["bg"], fg=theme["fg"], anchor="w",
                      font=("Segoe UI", 10, "bold")).pack(fill="x", padx=14, pady=(8, 2))
 
         def path_row(parent, label, var, tip, browse_command):
@@ -2642,20 +4892,20 @@ class RialtoApp:
 
         # --- Bonus content ---
         section("Bonus content")
-        tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=620,
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=520,
                  text=("Soundtracks, art, wallpapers, the design doc, anything at all. It gets a "
                        "BONUS button on the disc menu that opens the folder.")
                  ).pack(fill="x", padx=14, pady=(0, 4))
 
-        bonus_row = path_row(body, "Bonus folder:", self.bonus_folder_var,
+        bonus_row = path_row(col, "Bonus folder:", self.bonus_folder_var,
                              "The folder whose contents become the disc's bonus material. "
                              "Leave it empty and Rialto uses a bonus folder inside your game "
                              "folder if there is one.",
                              pick_dir(self.bonus_folder_var, "Pick your bonus content folder"))
 
-        bonus_note = tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                              anchor="w", font=("Segoe UI", 9), wraplength=620)
+        bonus_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
+                              anchor="w", font=("Segoe UI", 9), wraplength=520)
         bonus_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_bonus_note():
@@ -2687,7 +4937,7 @@ class RialtoApp:
             refresh_bonus_note()
             self.refresh_disc_meter()
 
-        bonus_buttons = tk.Frame(body, bg=theme["bg"])
+        bonus_buttons = tk.Frame(col, bg=theme["bg"])
         bonus_buttons.pack(fill="x", padx=14, pady=(6, 0))
         create_btn = self.icon_button(bonus_buttons, "gift", "Create Bonus Folder",
                                       create_bonus_folder, side="left")
@@ -2698,25 +4948,25 @@ class RialtoApp:
         # --- Mods ---
         section("Mods")
         mods_check = self.themed_check(
-            body, "Add a MODS button to the disc menu", self.mod_launcher_var,
+            col, "Add a MODS button to the disc menu", self.mod_launcher_var,
             command=self.save_signing_settings, anchor="w", padx=14, pady=2)
         ToolTip(mods_check, "Puts your mods folder on the disc and adds a MODS button to the menu "
                             "that runs the tool inside it. Works from the disc and after installing.")
-        tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=620,
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=520,
                  text=("Point at the folder holding your mod manager or loader. Rialto finds the "
                        ".exe inside it on its own. Leave it empty and a folder called mods inside "
                        "your game folder is used.")
                  ).pack(fill="x", padx=14, pady=(0, 2))
 
-        mods_row = path_row(body, "Mod folder:", self.mod_folder_var,
-                            "The folder your mod tool lives in - it does not have to be called "
+        mods_row = path_row(col, "Mod folder:", self.mod_folder_var,
+                            "The folder your mod tool lives in. It does not have to be called "
                             "mods. A folder already inside your game folder is used where it is, "
                             "not copied twice.",
                             pick_dir(self.mod_folder_var, "Pick the folder holding your mod tool"))
 
-        mods_note = tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                             anchor="w", font=("Segoe UI", 9), wraplength=620)
+        mods_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
+                             anchor="w", font=("Segoe UI", 9), wraplength=520)
         mods_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_mods_note(*_args):
@@ -2775,27 +5025,28 @@ class RialtoApp:
             except OSError as e:
                 self.update_status("⚠️ Could not create the mods folder: %s" % e)
 
-        mods_buttons = tk.Frame(body, bg=theme["bg"])
+        mods_buttons = tk.Frame(col, bg=theme["bg"])
         mods_buttons.pack(fill="x", padx=14, pady=(4, 0))
         mods_btn = self.icon_button(mods_buttons, "mods", "Create Mods Folder",
                                     open_mods_folder, side="left")
         ToolTip(mods_btn, "Makes a mods folder inside your game folder and opens it in Explorer.")
 
         # --- Compatibility mode ---
+        col = right
         section("Compatibility mode")
         compat_check = self.themed_check(
-            body, "Add a compatibility button to the disc menu", self.compat_mode_var,
+            col, "Add a compatibility button to the disc menu", self.compat_mode_var,
             anchor="w", padx=14, pady=2)
         ToolTip(compat_check, "Puts a second play button on the menu that starts your game with a "
                               "launch argument already set, so a player on older hardware does not "
                               "have to type one.")
-        tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=620,
-                 text=("For a game that can fall back to older graphics - OpenGL instead of Vulkan, "
-                       "windowed instead of fullscreen - if it already reads a launch argument.")
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=520,
+                 text=("For a game that can fall back to older graphics (OpenGL instead of Vulkan, "
+                       "windowed instead of fullscreen), if it already reads a launch argument.")
                  ).pack(fill="x", padx=14, pady=(0, 2))
 
-        compat_row = tk.Frame(body, bg=theme["bg"])
+        compat_row = tk.Frame(col, bg=theme["bg"])
         compat_row.pack(fill="x", padx=14, pady=3)
         tk.Label(compat_row, text="Launch argument:", bg=theme["bg"], fg=theme["fg"],
                  width=16, anchor="w").pack(side="left")
@@ -2804,19 +5055,19 @@ class RialtoApp:
         ToolTip(compat_entry, "Exactly what you would type after the .exe, such as -opengl. Spaces "
                               "separate two arguments; put quotes around one that contains a space.")
 
-        hint_row = tk.Frame(body, bg=theme["bg"])
+        hint_row = tk.Frame(col, bg=theme["bg"])
         hint_row.pack(fill="x", padx=14, pady=3)
         tk.Label(hint_row, text="What it does:", bg=theme["bg"], fg=theme["fg"],
                  width=16, anchor="w").pack(side="left")
         hint_entry = ttk.Entry(hint_row, textvariable=self.compat_hint_var)
         hint_entry.pack(side="left", fill="x", expand=True)
-        ToolTip(hint_entry, "One sentence, shown to the player when they hover the button. "
-                            "Say what changes, in their words: \"Runs the game on OpenGL "
+        ToolTip(hint_entry, "One sentence, shown when a player hovers over the button. "
+                            "Say what changes, in plain words: \"Runs the game on OpenGL "
                             "instead of Vulkan, for older graphics cards.\" Leave it empty "
-                            "and the menu explains it in general terms, in their language.")
+                            "and the menu explains it in general terms, in the player's language.")
 
-        compat_note = tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                               anchor="w", font=("Segoe UI", 9), wraplength=620)
+        compat_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
+                               anchor="w", font=("Segoe UI", 9), wraplength=520)
         compat_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_compat_note(*_args):
@@ -2855,18 +5106,18 @@ class RialtoApp:
         dialog.bind("<Destroy>", drop_compat_trace, add="+")
 
         # --- Steam ---
+        col = left
         section("Steam")
         steam_check = self.themed_check(
-            body, "Show an ADD TO STEAM button after install", self.steam_button_var,
+            col, "Show an Add to Steam button after install", self.steam_button_var,
             anchor="w", padx=14, pady=2)
-        ToolTip(steam_check, "After players install from your disc, the menu offers one click to put "
-                             "the game in their Steam library as a non-Steam game. Steam has to be "
-                             "closed first, and the menu tells them so.")
-        tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=620,
-                 text=("Nothing is uploaded and nothing is sold through Steam - it only makes a "
-                       "shortcut in the player's own library, so the game they bought on a disc "
-                       "sits beside the rest of what they play.")
+        ToolTip(steam_check, "After an install from your disc, the menu offers one click to add the "
+                             "game to the player's Steam library as a non-Steam game. Steam needs to be "
+                             "closed first, and the menu shows how.")
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=520,
+                 text=("Nothing is uploaded or sold through Steam. The button only adds a shortcut to "
+                       "the player's own Steam library.")
                  ).pack(fill="x", padx=14, pady=(0, 2))
 
         # --- Mac and Linux ---
@@ -2874,33 +5125,34 @@ class RialtoApp:
         # thing worth knowing is what Rialto does to a build folder - and an
         # author who reads that first stops hunting for a .dmg they do not need
         # to make.
+        col = right
         section("Mac and Linux on the same disc (only if you built them)")
-        tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=620,
-                 text=("Point at a plain build folder - the one you would have zipped up yourself "
-                       "- and Rialto packs it so the game comes off the disc ready to run. No "
-                       "Terminal, nothing to type. The disc's README then spells out the real "
-                       "steps for all three - run setup.exe, or open the Mac or Linux folder and "
-                       "what to do once you are in it - so nobody has to open a second file to "
-                       "find out which buttons to press.")
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=520,
+                 text=("Point at a plain build folder, the one you would have zipped up yourself, "
+                       "and Rialto packs it so the game comes off the disc ready to run. No "
+                       "Terminal, nothing to type. The disc's README spells out the real steps for "
+                       "all three: run setup.exe, or open the Mac or Linux folder and what to do once "
+                       "you are in it, so nobody has to open a second file to find out which buttons "
+                       "to press.")
                  ).pack(fill="x", padx=14, pady=(0, 4))
 
         unix_notes = {}
         for unix_var, unix_label, unix_tip in (
                 (self.mac_build_var, "Mac",
-                 "Your game's Mac build. A plain folder is fine - Rialto packs it into an "
+                 "Your game's Mac build. A plain folder is fine: Rialto packs it into an "
                  "archive that carries Mac file permissions, so the app opens with a "
                  "double-click. Already made a .dmg or a .zip? Point at the folder holding "
                  "it and Rialto ships it exactly as it is."),
                 (self.linux_build_var, "Linux",
-                 "Your game's Linux build. A plain folder is fine - Rialto packs it into an "
+                 "Your game's Linux build. A plain folder is fine: Rialto packs it into an "
                  "archive that carries the executable bit, so the game runs straight out of "
                  "it with no chmod and no Terminal. Already made an .AppImage or a .tar.gz? "
                  "Point at the folder holding it and Rialto ships it exactly as it is.")):
-            path_row(body, "%s build:" % unix_label, unix_var, unix_tip,
+            path_row(col, "%s build:" % unix_label, unix_var, unix_tip,
                      pick_dir(unix_var, "Pick your %s build folder" % unix_label))
-            unix_note = tk.Label(body, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                                 anchor="w", font=("Segoe UI", 9), wraplength=620)
+            unix_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
+                                 anchor="w", font=("Segoe UI", 9), wraplength=520)
             unix_note.pack(fill="x", padx=14, pady=(0, 2))
             unix_notes[unix_label] = (unix_var, unix_note)
 
@@ -2924,7 +5176,7 @@ class RialtoApp:
                                         "First beside it." % note_label)
                 else:
                     note.configure(text="Rialto packs this into an archive that opens ready to "
-                                        "run - your %s players never touch a Terminal."
+                                        "run, with no Terminal for your %s players."
                                         % note_label)
 
         refresh_unix_notes()
@@ -2940,6 +5192,8 @@ class RialtoApp:
                         pass
 
         dialog.bind("<Destroy>", drop_unix_traces, add="+")
+
+        self.fit_dialog_to_screen(dialog, self.DISC_EXTRAS_WIDTH)
 
     # Files that have to come out of the archive runnable. Anything starting
     # with the ELF magic is a Linux executable whatever it is called, which is
@@ -3072,7 +5326,11 @@ class RialtoApp:
         archive_path = os.path.join(dest_folder, archive_name)
         root_name = f"{stem}-{label}"
 
+        total, _count = self.tree_size(source, skip_ext=())
+        tick = self.build_ticker(f"Packaging the {label} build", total)
+
         def add_filter(info):
+            tick(info.size if info.isfile() else 0)
             # Directories and anything executable get the bits that make the
             # extracted copy usable; everything else stays plain readable.
             if info.isdir():
@@ -3277,7 +5535,7 @@ class RialtoApp:
                     # The author did the packaging themselves. Their archive
                     # carries its own permissions; leave it exactly alone.
                     self.update_status(f"Copying {label} build onto the disc...")
-                    shutil.copytree(path, dest)
+                    self.watched_copytree(path, dest, f"Copying the {label} build")
                     launcher = self.write_unix_launcher(dest, label)
                     self.write_unix_instructions(dest, label, archive="", launcher=launcher)
                     supplied = [n for n in sorted(os.listdir(dest))
@@ -3293,7 +5551,7 @@ class RialtoApp:
                     if not archive:
                         # Packing failed; ship the tree so nothing is lost, and
                         # the instructions fall back to the chmod route.
-                        shutil.copytree(path, dest, dirs_exist_ok=True)
+                        self.watched_copytree(path, dest, f"Copying the {label} build", dirs_exist_ok=True)
                         launcher = self.write_unix_launcher(dest, label)
                     self.write_unix_instructions(dest, label, archive=archive,
                                                  launcher=launcher)
@@ -3308,6 +5566,8 @@ class RialtoApp:
                 staged[label] = primary
                 self.update_status(f"✅ {label} build added to the disc")
             except Exception as e:
+                if getattr(self, "_abandon_build", False):
+                    raise
                 self.update_status(f"⚠️ Could not add {label} build: {e}")
         if staged:
             # One README, and every platform's real steps in it. A disc that
@@ -3400,6 +5660,28 @@ class RialtoApp:
                     pass
         return total
 
+    def _fileset_disc_bytes(self, output_path, items):
+        """What items take on a disc: whole sectors per file, plus one each for its record."""
+        total = 0
+
+        def add(path):
+            nonlocal total
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                return
+            total += (-(-size // 2048) + 1) * 2048
+        for item in items:
+            path = os.path.join(output_path, item)
+            if os.path.isdir(path):
+                for dirpath, _dirs, files in os.walk(path):
+                    total += 2048
+                    for f in files:
+                        add(os.path.join(dirpath, f))
+            else:
+                add(path)
+        return total
+
     def _fileset_needs_udf(self, output_path, items):
         """Plain disc format tops out at 4 GB per file; bigger files need UDF."""
         limit = 4 * 1024 * 1024 * 1024 - 1
@@ -3430,15 +5712,16 @@ class RialtoApp:
                 self.update_status("💾 USB export skipped")
                 return
             files = self._collect_disc_fileset(output_path)
+            copy = self.counting_copy("Copying to the USB drive", self._fileset_size(output_path, files))
             for item in files:
                 src = os.path.join(output_path, item)
                 target = os.path.join(dest, item)
                 if os.path.isdir(src):
                     if os.path.exists(target):
                         shutil.rmtree(target)
-                    shutil.copytree(src, target)
+                    shutil.copytree(src, target, copy_function=copy)
                 else:
-                    shutil.copy2(src, target)
+                    copy(src, target)
             hint_path = os.path.join(dest, "START HERE - double click setup.txt")
             with open(hint_path, "w", encoding="utf-8") as f:
                 f.write(
@@ -3448,28 +5731,46 @@ class RialtoApp:
                 )
             self.update_status(f"✅ USB export done: {len(files)} items copied to {dest}")
         except Exception as e:
+            if getattr(self, "_abandon_build", False):
+                raise
             self.update_status(f"❌ USB export failed: {e}")
 
     def _remove_partial_iso(self, iso_path):
-        """Delete a disc image a failed tool left half-written, so nobody burns it."""
-        try:
-            if os.path.exists(iso_path):
-                os.remove(iso_path)
-                self.update_status(f"🧹 Removed the unfinished {os.path.basename(iso_path)}")
-        except OSError:
-            self.update_status(f"⚠️ {os.path.basename(iso_path)} is unfinished; delete it before burning")
+        """Delete a disc image a failed tool left half-written, so nobody burns it.
 
-    def _build_single_iso(self, output_path, iso_path, items, disc_label, needs_udf):
-        """Build one ISO from a list of items. Used by multi-disc sets."""
-        mkisofs, oscdimg = find_iso_tools()
-        temp_folder = os.path.join(output_path, "temp_span_build")
+        mkisofs writes to MKISOFS_IMAGE_PART beside it until the image is finished, so that goes too.
+        """
+        name = os.path.basename(iso_path)
+        for path in (iso_path, os.path.join(os.path.dirname(iso_path), MKISOFS_IMAGE_PART)):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    self.update_status(f"🧹 Removed the unfinished {name}")
+            except OSError:
+                self.update_status(f"⚠️ {name} is unfinished; delete it before burning")
+
+    def image_growth(self, iso_path, payload):
+        """How far a disc image is, from its size on disk against what goes in it (B6)."""
         try:
-            if mkisofs:
-                tool = [mkisofs, "-o", iso_path, "-J", "-R", "-V", disc_label]
-                if needs_udf:
-                    tool += ["-udf", "-iso-level", "3"]
-                tool += items
-            elif oscdimg:
+            written = os.path.getsize(iso_path)
+        except OSError:
+            return None
+        return (min(written / payload, 0.99), "%.1f of %.1f GB" % (written / 1e9, payload / 1e9)) if payload else None
+
+    def _write_one_image(self, kind, tool_path, output_path, iso_path, items, disc_label, needs_udf,
+                         temp_name, step, copy=None):
+        """Write one disc image with one tool: (True, "") when it is made, else (False, why) (1.5.1).
+
+        mkisofs reads the build folder where it is, through the graft points in MKISOFS_PATH_LIST, and
+        writes MKISOFS_IMAGE_PART, renamed to iso_path once it is finished; oscdimg gets a copy of just these
+        items in temp_name, as before. A timeout, or a tool that cannot start, is raised to the caller, which
+        decides; a half-written image is the caller's to remove (_remove_partial_iso).
+        """
+        temp_folder = os.path.join(output_path, temp_name)
+        path_list = os.path.join(output_path, MKISOFS_PATH_LIST)
+        written = iso_path
+        try:
+            if kind == "oscdimg":
                 if os.path.exists(temp_folder):
                     shutil.rmtree(temp_folder)
                 os.makedirs(temp_folder)
@@ -3477,33 +5778,100 @@ class RialtoApp:
                     src = os.path.join(output_path, item)
                     dst = os.path.join(temp_folder, item)
                     if os.path.isdir(src):
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
-                fs_flag = "-u2" if needs_udf else "-j1"
-                tool = [oscdimg, "-m", fs_flag, f"-l{disc_label}", temp_folder, iso_path]
+                        shutil.copytree(src, dst, copy_function=copy or shutil.copy2)
+                    elif os.path.exists(src):
+                        (copy or shutil.copy2)(src, dst)
+                tool = [tool_path, "-m", "-u2" if needs_udf else "-j1", f"-l{disc_label}", temp_folder, iso_path]
             else:
-                self.update_status("❌ Multi-disc sets need mkisofs or oscdimg installed")
-                return False
-            try:
-                result = subprocess.run(tool, cwd=output_path, capture_output=True, text=True,
-                                        creationflags=subprocess.CREATE_NO_WINDOW, timeout=1800)
-            except subprocess.TimeoutExpired:
-                self.update_status("❌ Disc image stopped after 30 minutes without finishing")
-                self._remove_partial_iso(iso_path)
-                return False
-            if result.returncode != 0 or not os.path.exists(iso_path):
+                folders = {item for item in items if os.path.isdir(os.path.join(output_path, item))}
+                utf8 = mkisofs_reads_utf8(tool_path)
+                written = os.path.join(output_path, MKISOFS_IMAGE_PART)
+                if os.path.exists(written):
+                    os.remove(written)
+                # UTF-8 for a Cygwin or MSYS build, which is told so; any other reads the Windows code page,
+                # as it read its command line before.
+                with open(path_list, "w", encoding="utf-8" if utf8 else "mbcs", errors="replace",
+                          newline="\n") as fh:
+                    fh.write(mkisofs_path_list(items, folders))
+                tool = mkisofs_command(tool_path, disc_label, needs_udf, utf8)
+            payload = self._fileset_size(output_path, items)
+            result = self.run_tool_watched(tool, output_path, 1800, step,
+                                           watch=lambda: self.image_growth(written, payload))
+            if result.returncode != 0 or not os.path.exists(written):
                 error_tail = (result.stderr or result.stdout or "").strip().splitlines()
-                self.update_status(f"❌ Disc image failed: {error_tail[-1] if error_tail else 'unknown error'}")
-                self._remove_partial_iso(iso_path)
-                return False
-            return True
+                if result.returncode == 0:
+                    return False, "the tool ran but no image was written"
+                return False, error_tail[-1] if error_tail else "exit code %s" % result.returncode
+            if written != iso_path:
+                # A scanner can hold the finished image for a moment; a few tries before the image is
+                # called failed and thrown away.
+                for attempt in range(10):
+                    try:
+                        os.replace(written, iso_path)
+                        break
+                    except OSError:
+                        if attempt == 9:
+                            raise
+                        time.sleep(0.5)
+            return True, ""
         finally:
             if os.path.exists(temp_folder):
                 try:
                     shutil.rmtree(temp_folder)
-                except Exception:
+                except OSError:
                     pass
+            if os.path.exists(path_list):
+                try:
+                    os.remove(path_list)
+                except OSError:
+                    pass
+
+    def _build_single_iso(self, output_path, iso_path, items, disc_label, needs_udf):
+        """Build one ISO from a list of items. Used by multi-disc sets.
+
+        Each tool in disc_image_tools' order until one writes it (1.5.1); mkisofs only for a plant, as in
+        create_iso. create_spanned_isos keeps the tools already named in the log, so a set names its tool once.
+        A tool that fails, for any reason, hands over to the next one, as in create_iso, and its half-written
+        image is removed first. A timeout stops the build (a RuntimeError) with no next tool, and closing
+        Rialto removes the half-written image and stops it too.
+        """
+        said = getattr(self, "_image_tools_said", None)
+        tools = disc_image_tools(self.pressed_disc_on())
+        if not tools:
+            self.update_status("❌ Multi-disc sets need a disc image tool: mkisofs or oscdimg")
+            return False
+        for attempt, (kind, tool_path, carried) in enumerate(tools):
+            words = tool_words(kind, tool_path, carried)
+            if attempt:
+                self.update_status("🔄 Trying the next disc image tool: " + words)
+            elif said is None or words not in said:
+                self.update_status("✅ Writing the disc images with " + words)
+            if said is not None:
+                said.add(words)
+            copy = None
+            if kind == "oscdimg":
+                # Counted, so the window answers and the live line moves while each disc's items are copied.
+                copy = self.counting_copy("Preparing " + os.path.basename(iso_path),
+                                          self._fileset_size(output_path, items))
+            try:
+                made, why = self._write_one_image(kind, tool_path, output_path, iso_path, items, disc_label,
+                                                  needs_udf, "temp_span_build", "Writing " + os.path.basename(iso_path),
+                                                  copy)
+            except subprocess.TimeoutExpired:
+                self.update_status("❌ Disc image stopped after 30 minutes without finishing")
+                self._remove_partial_iso(iso_path)
+                raise RuntimeError(f"{os.path.basename(iso_path)} was not finished after 30 minutes. Check free "
+                                   "disk space and that no scanner is holding the build folder, then build again")
+            except Exception as e:
+                self._remove_partial_iso(iso_path)
+                if getattr(self, "_abandon_build", False):
+                    raise  # Rialto was closed: no next tool after the window has gone
+                made, why = False, str(e)
+            if made:
+                return True
+            self.update_status(f"❌ Disc image failed: {why}")
+            self._remove_partial_iso(iso_path)
+        return False
 
     def create_spanned_isos(self, output_path, meta, disc_label, capacity):
         """Split the build across numbered discs when it can't fit on one."""
@@ -3517,9 +5885,12 @@ class RialtoApp:
             return int(digits) if digits else 0
         bins.sort(key=bin_number)
 
-        budget = capacity - self.MEDIA_RESERVE
-        base_size = self._fileset_size(output_path, base_items)
-        if base_size > budget:
+        fit = capacity - self.SPAN_MARGIN
+        # Weighed as a disc holds it: each file rounded up to whole 2,048-byte
+        # sectors, and a sector more for its directory record, so a base of
+        # thousands of small files cannot push Disc 1 past the media.
+        base_size = self._fileset_disc_bytes(output_path, base_items)
+        if base_size > fit:
             # Warn, never refuse. The base fileset rides on disc 1 whatever it
             # weighs, so this only means disc 1 will be oversized - the set is
             # still worth building, and the per-disc check further down spells
@@ -3546,7 +5917,7 @@ class RialtoApp:
         current_size = base_size + os.path.getsize(note_path)
         for bin_file in bins:
             size = os.path.getsize(os.path.join(output_path, bin_file))
-            if current and current_size + size > budget:
+            if current and current_size + size > fit:
                 discs.append(current)
                 current, current_size = [], 0
             current.append(bin_file)
@@ -3559,7 +5930,7 @@ class RialtoApp:
         # loud when one overflows - warn only, the set still gets built.
         disc_sizes = [self._fileset_size(output_path, items) for items in discs]
         self.disc_overflow_warnings = oversized_disc_warnings(
-            disc_sizes, budget, self.target_media_var.get()
+            disc_sizes, fit, self.target_media_var.get()
         )
         for line in self.disc_overflow_warnings:
             self.update_status(line)
@@ -3567,11 +5938,14 @@ class RialtoApp:
         self.update_status(f"📀 This build needs {len(discs)} discs. Creating the set...")
         needs_udf = self._fileset_needs_udf(output_path, all_items)
         made = 0
+        self._image_tools_said = set()
+        self.images_made = []
         for number, items in enumerate(discs, start=1):
             iso_path = os.path.join(output_path, f"{game_name} Disc {number}.iso")
             label = f"{disc_label[:13]} D{number}"
             self.update_status(f"🔄 Creating Disc {number} of {len(discs)}...")
             if self._build_single_iso(output_path, iso_path, items, label, needs_udf):
+                self.images_made.append(iso_path)
                 size_mb = os.path.getsize(iso_path) / (1024 * 1024)
                 self.update_status(f"✅ Disc {number}: {os.path.basename(iso_path)} ({size_mb:.0f} MB)")
                 made += 1
@@ -3580,6 +5954,8 @@ class RialtoApp:
             self.refresh_windows_icon_cache()
         else:
             self.update_status(f"⚠️ Only {made} of {len(discs)} discs were created")
+            if self.pressed_disc_on():
+                raise RuntimeError(f"only {made} of {len(discs)} discs were made, and a plant needs the whole set")
 
     # === Rialto 1.5: GOG import ===
 
@@ -3612,7 +5988,7 @@ class RialtoApp:
             # is of the 1.9 Windows zip as published, taken on 2026-08-14; it
             # pins that exact file, so a substituted or truncated download
             # stops in fetch_to_file instead of being unpacked and executed.
-            from update.fetch import FetchProblem, fetch_to_file
+            from rialto.update.fetch import FetchProblem, fetch_to_file
             try:
                 fetch_to_file(INNOEXTRACT_URL, zip_path, hosts={"constexpr.org"},
                               cap=16 * 1024 * 1024, sha256=INNOEXTRACT_SHA256)
@@ -3622,7 +5998,7 @@ class RialtoApp:
                     "https://constexpr.org/innoextract/ if you need GOG import.")
                 return None
             with zipfile.ZipFile(zip_path) as archive:
-                from trusted_signing import safe_extract_all
+                from rialto.trusted_signing import safe_extract_all
                 safe_extract_all(archive, cache_dir, status=self.update_status)
             os.remove(zip_path)
             if os.path.exists(cached):
@@ -3683,6 +6059,8 @@ class RialtoApp:
             self.current_game_path = dest
             if hasattr(self, "game_path_var"):
                 self.game_path_var.set(dest)
+            # Paths chosen against the old game folder follow it, as Browse does.
+            self.rebase_stale_paths()
             self.refresh_disc_meter()
             title_entry = self.entries.get("Title")
             if title_entry is not None and not title_entry.get().strip():
@@ -3698,8 +6076,8 @@ class RialtoApp:
 
     def export_msix(self):
         """Package the selected game as a modern .msix installer."""
-        import msix_export
-        import trusted_signing
+        from rialto import msix_export
+        from rialto import trusted_signing
 
         if not self.current_game_path:
             self.show_centered_popup("Pick a game first", "Browse to your game folder, then export the .msix.")
@@ -3720,7 +6098,7 @@ class RialtoApp:
         dialog = tk.Toplevel(self.root)
         dialog.title("Export .msix")
         dialog.configure(bg=theme["bg"])
-        dialog.geometry("600x330")
+        self.centre_on(dialog, 600, 330, self.root)  # over Rialto, inside the work area (it had no place before)
         dialog.transient(self.root)
         dialog.grab_set()
 
@@ -3846,11 +6224,17 @@ class RialtoApp:
                 except Exception:
                     pass
             self.write_menu_config(menu_dir, temp_root)
+            several = self.stage_preview_games(menu_dir, temp_root)
 
             # Window icon lives two levels up from the launcher (the install root)
             if self.ico_path_var.get() and os.path.exists(self.ico_path_var.get()):
                 try:
-                    shutil.copy2(self.ico_path_var.get(), os.path.join(temp_root, "game_icon.ico"))
+                    # stage_preview_games may have hard-linked a game's own game_icon.ico here: copying
+                    # over the link would write into the author's file, so the link goes first.
+                    icon_dest = os.path.join(temp_root, "game_icon.ico")
+                    if os.path.lexists(icon_dest):
+                        os.remove(icon_dest)
+                    shutil.copy2(self.ico_path_var.get(), icon_dest)
                 except Exception:
                     pass
 
@@ -3869,9 +6253,105 @@ class RialtoApp:
                 command = [sys.executable, launcher]
 
             subprocess.Popen(command, cwd=menu_dir, env=env)
-            self.update_status("✅ Preview launched - PLAY/UNINSTALL are disabled in preview mode")
+            if several:
+                self.update_status("✅ Preview launched. Click PLAY GAMES to see the Choose Your Game page; "
+                                   "starting a game and UNINSTALL are switched off in a preview")
+            else:
+                self.update_status("✅ Preview launched - PLAY/UNINSTALL are disabled in preview mode")
         except Exception as e:
             self.update_status(f"❌ Preview failed: {e}")
+
+    # A game's exe is copied into a preview only up to this size when it cannot
+    # be hard-linked (another drive); past it the game shows no picture there.
+    PREVIEW_EXE_COPY_LIMIT = 64 * 1024 * 1024
+    # The disc menu's own rules for a game's picture (game_picture in MENU_TEMPLATE_SOURCE): one of these
+    # types and at most 8 MB, else it shows the exe's icon instead.
+    MENU_PICTURE_TYPES = (".ico", ".png", ".jpg", ".jpeg", ".bmp")
+    MENU_PICTURE_LIMIT = 8 * 1024 * 1024
+
+    def stage_preview_games(self, menu_dir, temp_root):
+        """Put what the Choose Your Game page shows into a preview of a disc of several games.
+
+        The menu takes each game's picture from inside its own install folder,
+        which in a preview is temp_root: the author's image, else the icon of
+        the game's exe. It refuses a path that leads out through a junction, so
+        each picture, or else each exe, is staged as a real file: a hard link
+        where the drive allows one, else a copy. A picture the menu would refuse
+        (not a picture type, or over 8 MB) stages the exe instead, whose icon the
+        menu then shows. A disc of one game stages nothing, as before. Returns
+        True when the disc has several games.
+
+        Nothing is ever written outside temp_root (security review, 1.5.1): the
+        bonus and mods folders in a preview are junctions to the author's own
+        folders, so a path through one of them is refused, never written into.
+        Two games sharing one picture or exe stage it once.
+        """
+        try:
+            with open(os.path.join(menu_dir, "menu_config.json"), encoding="utf-8") as f:
+                games = [g for g in json.load(f).get("games") or [] if isinstance(g, dict)]
+        except (OSError, ValueError, AttributeError):
+            return False
+        if len(games) < 2 or not self.current_game_path:
+            return False
+        source_root = os.path.realpath(self.current_game_path)
+        preview_root = os.path.realpath(temp_root)
+
+        def inside_game(rel):
+            """(parts, real source path) for a file inside the game folder, else None."""
+            parts = [p for p in rel.split("/") if p]
+            if not parts or ".." in parts or os.path.isabs(rel) or parts[0].lower() == "menu":
+                return None
+            source = os.path.realpath(os.path.join(source_root, *parts))
+            try:
+                if os.path.commonpath([source_root, source]) != source_root or not os.path.isfile(source):
+                    return None
+            except ValueError:
+                return None
+            return parts, source
+
+        no_picture, linked_out, staged = [], [], set()
+        for game in games:
+            icon = inside_game(str(game.get("icon") or "").replace("\\", "/").strip())
+            if icon:
+                try:
+                    usable = (icon[0][-1].lower().endswith(self.MENU_PICTURE_TYPES)
+                              and os.path.getsize(icon[1]) <= self.MENU_PICTURE_LIMIT)
+                except OSError:
+                    usable = False
+                if not usable:
+                    icon = None  # the menu falls back to the exe's icon, so the exe is what it needs
+            pick = icon or inside_game(str(game.get("exe") or "").replace("\\", "/").strip())
+            if not pick:
+                continue
+            parts, source = pick
+            label = str(game.get("name") or parts[-1])
+            dest = os.path.join(temp_root, *parts)
+            key = os.path.normcase(os.path.normpath(dest))
+            if key in staged:
+                continue  # another game's picture or exe, already staged
+            try:
+                if os.path.commonpath([preview_root, os.path.realpath(dest)]) != preview_root:
+                    linked_out.append(label)
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                try:
+                    os.link(source, dest)
+                except OSError:
+                    if icon or os.path.getsize(source) <= self.PREVIEW_EXE_COPY_LIMIT:
+                        shutil.copy2(source, dest)
+                    else:
+                        no_picture.append(label)
+                        continue
+                staged.add(key)
+            except (OSError, ValueError):
+                no_picture.append(label)
+        if no_picture:
+            self.update_status("ℹ️ The preview shows no picture for %s: the exe is large and on another "
+                               "drive. The finished disc shows it." % ", ".join(no_picture))
+        if linked_out:
+            self.update_status("ℹ️ The preview shows no picture for %s: it is in the bonus or mods folder, "
+                               "which a preview only links to. The finished disc shows it." % ", ".join(linked_out))
+        return True
 
     # === Rialto 1.5: desktop shortcut (launch like a normal app) ===
 
@@ -3919,10 +6399,22 @@ class RialtoApp:
             def ps_quote(value):
                 return "'" + str(value).replace("'", "''") + "'"
 
+            # Named for the version, like the Setup's own shortcuts: "Rialto 1.5.1".
+            name = "%s %s.lnk" % (APP_NAME, __version__)
+
             script_lines = [
                 "$ws = New-Object -ComObject WScript.Shell",
                 "$desktop = [Environment]::GetFolderPath('Desktop')",
-                "$s = $ws.CreateShortcut((Join-Path $desktop 'Rialto.lnk'))",
+                "$new = Join-Path $desktop %s" % ps_quote(name),
+                # This menu item used to name the shortcut plain "Rialto" (his word, 19 Oct 2026: the desktop
+                # said Rialto, not Rialto 1.5.1). One of those pointing at this same Rialto takes the new name.
+                "$old = Join-Path $desktop 'Rialto.lnk'",
+                # From source the target is pythonw.exe, so the script it starts has to match too.
+                ("if ((Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $new) -and "
+                 "($ws.CreateShortcut($old).TargetPath -eq %s) -and "
+                 "($ws.CreateShortcut($old).Arguments -eq %s)) { Rename-Item -LiteralPath $old -NewName %s }"
+                 % (ps_quote(target), ps_quote(arguments), ps_quote(name))),
+                "$s = $ws.CreateShortcut($new)",
                 "$s.TargetPath = %s" % ps_quote(target),
                 "$s.Arguments = %s" % ps_quote(arguments),
                 "$s.WorkingDirectory = %s" % ps_quote(app_dir),
@@ -3940,10 +6432,10 @@ class RialtoApp:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
             if result.returncode == 0:
-                self.update_status("✅ Rialto is on your desktop")
+                self.update_status("✅ %s %s is on your desktop" % (APP_NAME, __version__))
                 self.show_centered_popup(
                     "Shortcut Created",
-                    "Rialto is on your desktop. Double-click the bird to open it.")
+                    "%s %s is on your desktop. Double-click the bird to open it." % (APP_NAME, __version__))
                 # Explorer caches shortcut icons aggressively; without this the
                 # new one can keep showing the old blank page until logout.
                 self.refresh_windows_icon_cache()
@@ -3977,7 +6469,7 @@ class RialtoApp:
         "4. Identity validation. I am an INDIVIDUAL developer, not a company - "
         "tell me what ID I need, warn me about the parts people get wrong, and "
         "tell me how long it usually takes. If I say I am a company instead, "
-        "switch to the organisation path.\n"
+        "switch to the organization path.\n"
         "5. Creating a Public Trust certificate profile once validation passes.\n"
         "6. Giving my own user the \"Artifact Signing Certificate Profile "
         "Signer\" role, and explaining why signing fails without it.\n"
@@ -3985,14 +6477,14 @@ class RialtoApp:
         "8. Finding the three values I have to type into my build tool: the "
         "region endpoint URL, the account name, and the certificate profile "
         "name. Tell me exactly where in the portal each one is.\n\n"
-        "At the end, print those three values back to me as a labelled list so "
+        "At the end, print those three values back to me as a labeled list so "
         "I can copy them across. If a step fails, help me diagnose it before we "
         "move on."
     )
 
     def configure_signing(self):
         """Dialog for the user's own Azure Artifact Signing account details."""
-        import trusted_signing
+        from rialto import trusted_signing
 
         config = trusted_signing.load_config()
         theme = self.current_theme()
@@ -4293,6 +6785,10 @@ class RialtoApp:
                                      self.open_signing_guide, side="left")
         ToolTip(guide_btn, "Opens the full signing guide as an offline page in your browser.")
 
+        # 740 lines where the work area has them, less where it has not (1.5.1, B13.4): the page scrolls
+        # inside as it always did, and Save, Check My Setup and Cancel stay above the taskbar.
+        self.fit_dialog_to_screen(dialog, 640, height=740)
+
     def show_setup_report(self, results):
         """The Check My Setup readout, in Rialto's own dressing.
 
@@ -4304,21 +6800,25 @@ class RialtoApp:
         theme = self.current_theme()
         all_ok = all(ok for _label, ok, _hint in results)
         rows = len(results)
+        # Room to breathe where the work area has it. On a short screen it is as tall as the work area allows,
+        # which is less than this and still more than the rows hold: seven rows of long answers ask for 626
+        # lines, and a 720-line screen leaves 640 under its taskbar and the title bar (B13.4).
+        roomy = min(760, 300 + rows * 62)
 
         dialog, body = self.themed_dialog(
             "Check My Setup",
             "Everything signing needs, one line at a time",
-            width=660, height=min(760, 300 + rows * 62))
+            width=660, height=roomy)
 
         close_row = tk.Frame(body, bg=theme["bg"])
-        close_row.pack(side="bottom", fill="x", padx=16, pady=(4, 14))
+        close_row.pack(side="bottom", fill="x", padx=16, pady=(4, 10))
         ttk.Button(close_row, text="Close", command=dialog.destroy,
                    style="Primary.TButton").pack(side="right")
 
         # The verdict goes at the top, because it is the answer to the question
         # that was actually asked.
         verdict = tk.Frame(body, bg=theme["accent"] if all_ok else theme["header_bg"])
-        verdict.pack(fill="x", padx=16, pady=(14, 6))
+        verdict.pack(fill="x", padx=16, pady=(10, 6))
         if all_ok:
             headline = "You are ready to sign."
             detail = ("Tick Sign Final Build and press Build. Rialto signs your installer "
@@ -4337,7 +6837,7 @@ class RialtoApp:
 
         for label, ok, hint in results:
             row = tk.Frame(body, bg=theme["bg"])
-            row.pack(fill="x", padx=16, pady=3)
+            row.pack(fill="x", padx=16, pady=2)
 
             mark = tk.Label(row, text="✓" if ok else "•",
                             bg=theme["bg"],
@@ -4353,27 +6853,24 @@ class RialtoApp:
                      justify="left", wraplength=560,
                      font=("Segoe UI", 9)).pack(fill="x")
 
+        # Never taller than the work area, and never shorter than what the rows hold when that fits: a found
+        # tool is answered with its whole path, and long answers wrap.
+        self.fit_dialog_to_screen(dialog, 660, height=roomy)
         self.root.wait_window(dialog)
 
     # === Documentation ===
 
     def doc_path(self, filename):
-        """Locate a shipped doc, preferring a copy the author can edit.
+        """Locate a shipped doc: the one this Rialto carries, else a copy beside it.
 
-        Beside Rialto first (APP_ROOT/docs, then APP_ROOT), then inside the
-        frozen bundle. A bundled copy lives in a temp folder the PyInstaller
-        bootloader deletes on exit, so it is copied out to APP_ROOT/docs before
-        the browser is pointed at it - otherwise the page would vanish from
-        under the browser the moment Rialto closed.
+        A frozen Rialto shows the guide inside its own bundle, so an update
+        unzipped over an older folder never shows the older guide that folder
+        kept. The bundle lives in a temp folder the PyInstaller bootloader
+        deletes on exit, so the page is copied out to APP_ROOT/docs, over any
+        older copy, before the browser is pointed at it - otherwise the page
+        would vanish from under the browser the moment Rialto closed. A source
+        run reads the repo's docs/ (APP_ROOT/docs, then APP_ROOT).
         """
-        local = [
-            os.path.join(APP_ROOT, "docs", filename),
-            os.path.join(APP_ROOT, filename),
-        ]
-        for candidate in local:
-            if os.path.isfile(candidate):
-                return candidate
-
         meipass = getattr(sys, "_MEIPASS", None)
         for bundled in ([os.path.join(meipass, "docs", filename),
                          os.path.join(meipass, filename)] if meipass else []):
@@ -4381,10 +6878,32 @@ class RialtoApp:
                 target = os.path.join(APP_ROOT, "docs", filename)
                 try:
                     os.makedirs(os.path.dirname(target), exist_ok=True)
-                    shutil.copy2(bundled, target)
+                    # Never through a link put at docs\<file> (security review, 1.5.1): the page goes to
+                    # a temporary file beside it and replaces the name itself, never what a link points
+                    # at. A copy that is already the same is left as it is.
+                    linked = os.path.islink(target) or getattr(os.path, "isjunction", lambda _p: False)(target)
+                    if not linked and os.path.isfile(target) and same_file_bytes(bundled, target):
+                        return target
+                    handle, temp = tempfile.mkstemp(prefix=".rialto-", suffix=".tmp", dir=os.path.dirname(target))
+                    try:
+                        with os.fdopen(handle, "wb") as out, open(bundled, "rb") as page:
+                            shutil.copyfileobj(page, out)
+                        os.replace(temp, target)
+                    except OSError:
+                        if os.path.exists(temp):
+                            os.remove(temp)
+                        raise
                     return target
                 except OSError:
                     return bundled  # read-only install: temp copy is better than nothing
+
+        local = [
+            os.path.join(APP_ROOT, "docs", filename),
+            os.path.join(APP_ROOT, filename),
+        ]
+        for candidate in local:
+            if os.path.isfile(candidate):
+                return candidate
         return None
 
     def confirm_open_offline_page(self, title):
@@ -4427,6 +6946,7 @@ class RialtoApp:
             return
         if not self.show_centered_popup(
                 "Check for a New Rialto",
+                f"You have Rialto {__version__}.\n\n"
                 "This asks the release server whether a newer Rialto exists.\n\n"
                 "One request, now, with nothing about you in it. Rialto keeps "
                 "nothing about the answer.\n\n"
@@ -4446,7 +6966,7 @@ class RialtoApp:
         def work():
             outcome = _Said("The check did not finish. Nothing was changed.")
             try:
-                from update.check import check_for_update
+                from rialto.update.check import check_for_update
                 outcome = check_for_update(__version__)
             except Exception:
                 pass
@@ -4458,20 +6978,50 @@ class RialtoApp:
     def _on_new_rialto_checked(self, outcome):
         self._update_check_running = False
         self.update_status("ℹ️ " + outcome.sentence)
-        if outcome.release is None:
-            self.show_centered_popup("Check for a New Rialto", outcome.sentence)
+        if outcome.release is None and getattr(outcome, "look_yourself", False):
+            from rialto.update.keys import RELEASE_PAGE
+            # The server answered but publishes no feed yet (1.5.1): Rialto cannot tell, so it offers the
+            # releases page, where the person can look for themselves.
+            if self.show_centered_popup(
+                    "Check for a New Rialto",
+                    f"You have Rialto {__version__}.\n\n" + outcome.sentence + "\n\n"
+                    "Open the releases page in your web browser to look for yourself?",
+                    kind="yesno"):
+                import webbrowser
+                webbrowser.open(RELEASE_PAGE)
             return
-        from update.keys import RELEASE_PAGE
-        page = outcome.release.notes_url or RELEASE_PAGE
-        if self.show_centered_popup(
-                "Check for a New Rialto",
-                outcome.sentence + "\n\n"
-                "Open the release page in your web browser? Download Rialto.exe and "
-                "menu.exe from there and keep them together, as before.\n\n"
-                "Open it?",
-                kind="yesno"):
+        if outcome.release is None:
+            self.show_centered_popup("Check for a New Rialto", f"You have Rialto {__version__}.\n\n" + outcome.sentence)
+            return
+        from rialto.update.feed import browser_url
+        from rialto.update.keys import RELEASE_PAGE
+        # The download itself, in one click (1.5.1): the address comes out of the signed feed, and
+        # only a github.com or updates.wetheindies.com one is handed to the browser. It used to
+        # send the person to the release page for "Rialto.exe and menu.exe", which the page no
+        # longer offers: it offers one file.
+        download = browser_url(outcome.release.url)
+        # An installed Rialto (its Setup left the uninstaller here) updates with the new version's Setup,
+        # Rialto-X.Y.Z-Setup.exe, which sits beside the zip in the same release and keeps settings and
+        # profiles as they are. The version is the signed feed's, checked as X.Y.Z when it was read.
+        if download.lower().endswith(".zip") and os.path.isfile(os.path.join(APP_ROOT, "unins000.dat")):
+            download = download.rsplit("/", 1)[0] + "/Rialto-%s-Setup.exe" % outcome.release.version
+        name = download.rsplit("/", 1)[-1]
+        installed = os.path.isfile(os.path.join(APP_ROOT, "unins000.dat"))
+        if download and name.lower().endswith(".zip"):
+            ask = ("Download it now? Your web browser saves " + name + ". Unzip the whole folder "
+                   "somewhere new and open Rialto.exe from it.")
+        elif download and name.lower().endswith(".exe") and installed:
+            ask = ("Download it now? Your web browser saves " + name + ". Close Rialto and run it "
+                   "to update: your settings and profiles stay as they are.")
+        elif download and name.lower().endswith(".exe"):
+            ask = ("Download it now? Your web browser saves " + name + ". Run it to install the new "
+                   "Rialto for you; this copy and its settings stay where they are.")
+        else:
+            download = ""
+            ask = "Open the release page in your web browser? The download is there."
+        if self.show_centered_popup("Check for a New Rialto", outcome.sentence + "\n\n" + ask, kind="yesno"):
             import webbrowser
-            webbrowser.open(page)
+            webbrowser.open(download or browser_url(outcome.release.notes_url) or RELEASE_PAGE)
 
     def open_signing_guide(self):
         self.open_doc("signing-guide.html", "the signing guide")
@@ -5122,29 +7672,59 @@ class RialtoApp:
             pass
 
     def build_all(self):
-        """Every build step, from copying the game to the finished ISO."""
+        """Every build step, from copying the game to the finished ISO. True when it finished."""
         if not self.current_game_path:
             self.update_status("❌ Error: Game path not selected.")
-            return
+            return False
 
-        game_name = os.path.basename(self.current_game_path)
+        game_name = os.path.basename(os.path.normpath(self.current_game_path))
         output_path = safe(os.path.abspath(os.path.join(OUTPUT_DIR, game_name)))
+        # The build folder is output\<the game folder's name>. A game folder
+        # with no name (a drive root, E:\) would make it output\ itself, and
+        # the clean-up at the end, which keeps only disc images, would then
+        # delete every other game's build folder (1.5.1).
+        game_real = os.path.realpath(self.current_game_path)
+        try:
+            inside_output = os.path.commonpath([game_real, os.path.realpath(OUTPUT_DIR)]) == os.path.realpath(OUTPUT_DIR)
+        except ValueError:
+            inside_output = False
+        if inside_output:
+            # Step 0 empties the build folder: a game kept in output\ would be
+            # deleted before it was copied (correctness review, 1.5.1).
+            self.update_status("❌ Build failed: your game folder is inside Rialto's output folder, which each "
+                               "build empties. Move the game somewhere else, such as input\\, and build again.")
+            return False
+        if not game_name or game_name == PLACED_FILES_DIR or os.path.dirname(output_path) != safe(OUTPUT_DIR):
+            self.update_status("❌ Build failed: put the game in a folder of its own. Rialto names the build "
+                               "after that folder, and a drive root has no name.")
+            return False
         os.makedirs(output_path, exist_ok=True)
 
         # Cleared per build so a warning from an earlier one never haunts this
         # summary; create_spanned_isos refills it if a disc comes out oversized.
         self.disc_overflow_warnings = []
+        self.images_made = []
 
         try:
-            # 0. Clear the previous run's disc image out of the way. Inno now
-            # excludes *.iso from the payload, but leaving a 900 MB file from
-            # last time sitting in the build folder helps nobody.
-            for stale in glob.glob(os.path.join(output_path, "*.iso")):
+            # 0. Start from an empty build folder (1.5.1). Only the last disc
+            # image used to be cleared, so a build that stopped halfway left
+            # its staged files behind and the next build copied over them: a
+            # file deleted from the game since still rode into the installer.
+            # A link inside is removed, never followed.
+            if os.listdir(output_path):
+                self.update_status(f"🧹 Clearing the last build of {game_name} to start fresh: "
+                                   f"output\\{game_name} is emptied, disc images too")
+            for stale in os.listdir(output_path):
+                path = os.path.join(output_path, stale)
                 try:
-                    os.remove(stale)
-                    self.update_status(f"🧹 Cleared the previous disc image: {os.path.basename(stale)}")
-                except OSError:
-                    pass
+                    if os.path.islink(path) or getattr(os.path, "isjunction", lambda _p: False)(path):
+                        os.unlink(path) if os.path.isfile(path) else os.rmdir(path)
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                except OSError as e:
+                    self.update_status(f"⚠️ Could not clear {stale} from the last build: {e}")
 
             # 1. Copy runtime dependencies
             self.update_status("Copying runtime dependencies...")
@@ -5178,6 +7758,9 @@ class RialtoApp:
             self.build_bonus_gallery(self.current_game_path, output_path,
                                      self.resolved_bonus_dir() or None)
 
+            # 3.7. Files the installer places on the player's PC (1.5.1, B10)
+            self.stage_placed_files(output_path)
+
             # 4. Stage the disc menu
             self.update_status("Compiling menu systems...")
             self.compile_menu_launcher(output_path)
@@ -5207,12 +7790,26 @@ class RialtoApp:
             # 9.5. Universal Disc: stage Mac and Linux builds for the disc (optional)
             self.stage_universal_builds(output_path)
 
+            # A Build Queue set to installers only stops here (1.5.1, B1): the
+            # disc's files, setup.exe among them, stay in the output folder.
+            if (getattr(self, "_batch", None) or {}).get("installers_only"):
+                self.log_build_event(meta, output_path, success=True)
+                self.update_status(f"✅ Installers only: setup.exe and the disc's files are in {output_path}")
+                return True
+
             # 10. Create ISO
             self.update_status("Creating ISO image...")
             self.create_iso(output_path, meta)
 
+            # 10.1. A pressed disc: the checksum file and the master sheet (1.5.1, B5),
+            # for the images this build made and no others
+            if self.pressed_disc_on():
+                self.write_pressing_files(output_path, meta, self.images_made)
+
             # 10.5. USB export (optional) - must run before cleanup deletes the disc files
-            if self.usb_export_var.get():
+            if self.usb_export_var.get() and getattr(self, "_batch", None) is not None:
+                self.update_status("📋 Also export for USB is skipped in a Build Queue: it asks for a folder")
+            elif self.usb_export_var.get():
                 self.export_usb_fileset(output_path, meta)
 
             # 11. Clean output folder
@@ -5228,17 +7825,30 @@ class RialtoApp:
             overflow = getattr(self, "disc_overflow_warnings", [])
             for line in overflow:
                 self.update_status(line)
-            self.play_completion_jingle()
+            if getattr(self, "_batch", None) is None:
+                self.play_completion_jingle()  # a Build Queue plays it once, at the end
             done_message = f"Build complete for {game_name}"
             if overflow:
                 # The popup stays short, so it points at the log
                 # rather than trying to hold the full per-disc breakdown.
                 done_message += "\n\n⚠️ At least one disc is larger than your target media - see the status log."
             self.show_centered_popup("Done", done_message)
+            return True
 
+        except RuntimeError as e:
+            # A stop Rialto chose, with its reason: one line, no traceback.
+            self.update_status(f"❌ Build failed: {e}")
+            self.update_status(f"   What was made so far is in {output_path}. The next build starts afresh.")
+            return False
         except Exception as e:
             self.update_status(f"❌ Build failed: {e}")
             self.update_status(f"Traceback: {traceback.format_exc()}")
+            self.update_status(f"   What was made so far is in {output_path}. The next build starts afresh.")
+            return False
+        finally:
+            # The files to place on the PC were staged beside the build folder for ISCC alone, which has
+            # compiled them into setup.exe or stopped (1.5.1, end-to-end runs). Made or not, they go now.
+            shutil.rmtree(placed_files_root(output_path), ignore_errors=True)
 
 
 
@@ -5246,6 +7856,15 @@ class RialtoApp:
 
 
 
+
+    def say_missing_tools(self):
+        """At start (1.5.1, B12.2): one log line when a tool Rialto needs cannot be found, installed or carried."""
+        try:
+            missing = missing_tool_refusals(False)
+        except Exception:
+            return
+        if missing:
+            self.update_status("⚠️ " + " ".join(missing))
 
     def run_preflight_check(self):
         issues = []
@@ -5258,6 +7877,18 @@ class RialtoApp:
 
         if not os.path.isdir(game_path):
             issues.append("Choose your game folder first (Browse for your game folder).")
+        elif not os.path.basename(os.path.normpath(game_path)):
+            issues.append("Put the game in a folder of its own: Rialto names the build after that "
+                          "folder, and a drive root has no name.")
+        else:
+            try:
+                in_output = os.path.commonpath([os.path.realpath(game_path), os.path.realpath(OUTPUT_DIR)]) \
+                    == os.path.realpath(OUTPUT_DIR)
+            except ValueError:
+                in_output = False
+            if in_output:
+                issues.append("Your game folder is inside Rialto's output folder, which each build empties. "
+                              "Move the game somewhere else, such as input\\.")
 
         # Check files
         if not os.path.isfile(background_path):
@@ -5277,12 +7908,90 @@ class RialtoApp:
         if missing_fields:
             issues.append("Missing metadata fields: " + ", ".join(missing_fields))
 
+        # Files to Place on the PC (1.5.1, B10, security review): every row from
+        # inside the game folder, and only data outside the install folder.
+        for row in getattr(self, "placed_files", []) or []:
+            if isinstance(row, dict):
+                problem = placed_row_problem(row, game_path)
+                if problem:
+                    issues.append(f"Files to Place on the PC: {row.get('source') or '(no file)'} cannot be "
+                                  f"placed, because {problem}. Fix the row in Files to Place on the PC, at the bottom of Disc Extras.")
+
+        # The tools (1.5.1, B12.2): no installer compiler, or no disc image tool for this disc, installed
+        # or carried, is said here, before anything is copied, not found out after the installer compiles.
+        # A Build Queue set to installers only makes no image, so it needs no image tool.
+        issues.extend(missing_tool_refusals(self.pressed_disc_on(),
+                                            not (getattr(self, "_batch", None) or {}).get("installers_only")))
+
+        # A pressed disc (1.5.1, B5): refused here, before anything is copied.
+        note = ""
+        if self.pressed_disc_on():
+            refusal = pressed_refusal(self.target_media_var.get())
+            if refusal:
+                issues.append("Pressed disc: " + refusal)
+            if not self.sign_final_build.get():
+                note = ("\n\nSign Final Build is off. Once the plant has the image, the disc cannot be "
+                        "re-signed.")
+
         if issues:
             self.show_centered_popup("Preflight Check Failed", "\n".join(issues))
             return False
         else:
-            self.show_centered_popup("Preflight Check Passed", "All required files and metadata are present.")
+            self.show_centered_popup("Preflight Check Passed", "All required files and metadata are present." + note)
             return True
+
+    def pressed_disc_on(self):
+        var = getattr(self, "pressed_disc_var", None)
+        try:
+            return bool(var is not None and var.get())
+        except tk.TclError:
+            return False
+
+    def write_pressing_files(self, output_path, meta, made):
+        """Chksum.md5 and the master sheet, beside the finished images (1.5.1, B5).
+
+        Only the images in `made`, the ones this build finished (create_iso's images_made), never every
+        *.iso in the folder: a half-written or left-over image must not reach a plant's sheet.
+        """
+        def disc_order(name):
+            digits = re.findall(r"(\d+)", name)
+            return (int(digits[-1]) if digits else 0, name.lower())
+
+        images = sorted((os.path.basename(p) for p in (made or [])
+                         if os.path.dirname(os.path.abspath(p)) == os.path.abspath(output_path)
+                         and os.path.isfile(p)), key=disc_order)
+        if not images:
+            raise RuntimeError("No disc image to send to the plant")
+        disc_type = PRESSED_DISC_TYPES.get(self.target_media_var.get(), "")
+        discs = []
+        for name in images:
+            path = os.path.join(output_path, name)
+            self.update_status(f"🔐 Checksumming {name} for the plant...")
+            label, udf = iso_facts(path)
+            tick = self.build_ticker(f"Checksumming {name}", os.path.getsize(path))
+            discs.append({"file": name, "bytes": os.path.getsize(path), "md5": file_md5(path, progress=tick),
+                          "label": label, "udf": udf, "type": disc_type})
+        signed = {}
+        try:
+            from rialto import trusted_signing
+            for name, path in (("setup.exe", os.path.join(output_path, "setup.exe")),
+                               ("menu.exe", os.path.join(output_path, "menu", "menu.exe"))):
+                answer = trusted_signing.has_valid_signature(path)
+                signed[name] = {True: "yes (a signature Windows trusts)", False: "no"}.get(answer, "not checked")
+        except ImportError:
+            pass
+        title = meta.get("Title") or meta.get("GameName") or "Game"
+        with open(os.path.join(output_path, "Chksum.md5"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(checksum_text(discs))
+        sheet_name = iss_value(title, "Game", for_path=True) + " master sheet.txt"
+        with open(os.path.join(output_path, sheet_name), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(master_sheet_text(title, meta.get("Developer", ""), __version__,
+                                      time.strftime("%d %B %Y").lstrip("0"), discs, signed))
+        self.update_status(f"📄 Wrote Chksum.md5 and {sheet_name} for the plant")
+        for disc in discs:
+            sectors = disc["bytes"] // SECTOR_BYTES
+            if disc_type == "DVD-9" and sectors <= DVD5_SECTORS:
+                self.update_status(f"ℹ️ {disc['file']} fits on one layer: a DVD-5 presses cheaper")
 
 
 
@@ -5408,7 +8117,7 @@ class RialtoApp:
         meta = {k: self.entries[k].get().strip() for k in self.entries}
         compat_args = split_launch_args(self.compat_args_var.get()) if self.compat_mode_var.get() else []
         mod_exe = self.detect_mod_launcher_exe(root_path) if self.mod_launcher_var.get() else ""
-        return {
+        config = {
             # Window title and the on-screen title. Used to be baked into a
             # per-game menu.exe; now it rides in the config like everything else.
             "title": meta.get("Title", "").strip() or "Game",
@@ -5442,6 +8151,11 @@ class RialtoApp:
             # own translated wording instead.
             "compat_hint": sanitize_text(self.compat_hint_var.get()).strip()[:200]
         }
+        # A Start Menu shortcut for each game (1.5.1, B9): read by the installer
+        # script, not the menu. Absent unless asked for on a disc of several.
+        if getattr(self, "game_shortcuts", False) and len(config["games"]) > 1:
+            config["start_menu_per_game"] = True
+        return config
 
     def write_menu_config(self, menu_dir, root_path):
         """Write menu_config.json into the staged menu folder."""
@@ -5516,35 +8230,23 @@ class RialtoApp:
 
 
     def enhance_installer_security(self, output_path):
-        """Add security attributes to reduce false positives"""
+        """Say whether setup.exe carries a signature.
+
+        It used to write a SECURITY_INFO.txt as well, which the clean-up then
+        deleted: it never reached a player, and the log said "Added security
+        documentation" about it. Gone in 1.5.1; the signature check stays.
+        """
         setup_path = os.path.join(output_path, "setup.exe")
-        
+
         if os.path.exists(setup_path):
             try:
-                # Create security info file
-                security_info = os.path.join(output_path, "SECURITY_INFO.txt")
-                with open(security_info, "w", encoding="utf-8") as f:
-                    f.write("SECURITY INFORMATION\n")
-                    f.write("=" * 50 + "\n\n")
-                    f.write("This installer was created with Rialto Disc Builder\n")
-                    f.write("Installer Type: Inno Setup\n")
-                    f.write("Source: Legitimate game distribution\n")
-                    f.write("False Positive: Common with unsigned executables\n\n")
-                    f.write("To verify authenticity:\n")
-                    f.write("1. Check file properties for version info\n")
-                    f.write("2. Scan with multiple antivirus engines\n")
-                    f.write("3. Consider code signing for production releases\n\n")
-                    f.write("For code signing support, use Configure Signing in Rialto (see SIGNING.md)\n")
-                
-                # Log security enhancement
-                self.update_status("✅ Added security documentation")
 
                 # Read the signature back rather than assuming. This line used
                 # to say "Installer is unsigned" unconditionally, which meant a
                 # build that had just signed setup.exe successfully finished by
                 # telling the author it had not.
                 try:
-                    import ssl_signing
+                    from rialto import ssl_signing
                     signed = ssl_signing.is_signed(setup_path)
                 except Exception:
                     signed = None
@@ -5575,16 +8277,44 @@ class RialtoApp:
         else:
             self.update_status("Compiling installer...")
         
-        # ISCC.exe from Inno Setup 6: PATH, then either install mode's folder
-        iscc = find_inno_compiler()
+        # ISCC.exe from Inno Setup 6: PATH, then either install mode's folder, then 7's, then the one
+        # Rialto carries (1.5.1). The log says which.
+        iscc, carried = installer_compiler()
         problem = None
+        unsigned_in_queue = False
 
         if iscc:
             try:
                 command = [iscc, iss_path]
+                if carried:
+                    self.update_status("ℹ️ Building the installer with " + tool_words("iscc", iscc, True))
+                elif _inno_setup_major(iscc) == 7:
+                    self.update_status("ℹ️ Building the installer with Inno Setup 7 (Inno Setup 6 is not installed)")
+                else:
+                    self.update_status("ℹ️ Building the installer with " + tool_words("iscc", iscc, False))
                 # An hour: a Blu-ray-sized game can take well over five minutes to
                 # compress, and a timeout now stops the build.
-                result = subprocess.run(command, cwd=output_path, capture_output=True, text=True, timeout=3600)
+                # Watched (1.5.1, B6): ISCC names each file as it starts on it
+                # (seen streaming through the pipe, one line per file), so a
+                # file's bytes count once ISCC has moved on to the next.
+                total, files = self.tree_size(output_path)
+                reached = {"bytes": 0, "files": 0, "current": 0}
+
+                def on_line(line):
+                    path = iscc_compressing_path(line)
+                    if not path:
+                        return None
+                    reached["bytes"] += reached["current"]
+                    reached["files"] += 1
+                    try:
+                        reached["current"] = os.path.getsize(path)
+                    except OSError:
+                        reached["current"] = 0
+                    return (min(reached["bytes"] / total, 0.99) if total else None,
+                            "{:,} of {:,} files".format(min(reached["files"], files), files))
+
+                result = self.run_tool_watched(command, output_path, 3600, "Compressing the installer",
+                                               on_line=on_line)
                 
                 if result.returncode == 0:
                     setup_path = os.path.join(output_path, "setup.exe")
@@ -5595,19 +8325,22 @@ class RialtoApp:
                         if self.sign_final_build.get():
                             signed = False
                             try:
-                                import trusted_signing
+                                from rialto import trusted_signing
                                 if trusted_signing.is_configured():
-                                    ok, message = trusted_signing.sign_file(setup_path, self.update_status)
+                                    ok, message = self.run_watched_call(
+                                        "Signing setup.exe", lambda log: trusted_signing.sign_file(setup_path, log))
                                     self.update_status(("✅ " if ok else "⚠️ ") + message)
                                     signed = ok
                                 else:
                                     self.update_status("ℹ️ Automatic signing not set up yet (see the Configure Signing button)")
                             except Exception as e:
+                                if getattr(self, "_abandon_build", False):
+                                    raise
                                 self.update_status(f"⚠️ Signing error: {e}")
 
                             if signed:
                                 try:
-                                    import ssl_signing
+                                    from rialto import ssl_signing
                                     self.update_status(f"🔍 Verification: {ssl_signing.verify_signature(setup_path)}")
                                 except Exception:
                                     pass
@@ -5617,7 +8350,8 @@ class RialtoApp:
                                 self.update_status(f"📁 Files to sign are in: {output_path}")
 
                                 import tkinter.messagebox as msgbox
-                                result = msgbox.askokcancel(
+                                # Never offered in a Build Queue (B1): nobody is there to sign by hand.
+                                result = False if getattr(self, "_batch", None) is not None else msgbox.askokcancel(
                                     "Code Signing Pause",
                                     f"Automatic signing was skipped or failed.\n\n"
                                     f"Files location: {output_path}\n\n"
@@ -5628,7 +8362,11 @@ class RialtoApp:
                                     f"Click Cancel to skip signing and continue."
                                 )
 
-                                if result:
+                                if getattr(self, "_batch", None) is not None:
+                                    # Nobody is there to sign by hand: a queue must
+                                    # not call an unsigned disc Done (security review).
+                                    unsigned_in_queue = True
+                                elif result:
                                     self.update_status("✅ Continuing with signed files...")
                                 else:
                                     self.update_status("⏭️ Skipping code signing, continuing build...")
@@ -5651,16 +8389,16 @@ class RialtoApp:
             except Exception as e:
                 problem = "ISCC could not be run"
                 self.update_status(f"❌ Error running ISCC: {e}")
-        elif inno_setup_7_only():
-            problem = "Rialto 1.5 needs Inno Setup 6"
-            self.update_status("⚠️ Found Inno Setup 7, but Rialto 1.5 builds with Inno Setup 6. "
-                               "Install Inno Setup 6 as well (the two sit side by side): " + INNO_SETUP_DOWNLOAD)
         else:
-            problem = "Inno Setup 6 was not found"
-            self.update_status("⚠️ ISCC.exe not found. Cannot create setup.exe. Download Inno Setup 6: " + INNO_SETUP_DOWNLOAD)
+            problem = "Inno Setup was not found"
+            self.update_status("⚠️ ISCC.exe not found. Cannot create setup.exe. Download Inno Setup 6 or 7: "
+                               + INNO_SETUP_DOWNLOAD)
 
         if problem:
             raise RuntimeError(f"No installer was made ({problem}), so the build was stopped.")
+        if unsigned_in_queue:
+            raise RuntimeError("Sign Final Build is on and signing did not work, so this disc would have "
+                               "gone out unsigned. Fix signing under Configure Signing, then build it again")
 
 
 
@@ -5707,10 +8445,18 @@ class RialtoApp:
         self.copy_vcruntime_dlls(output_path)
 
         if copied_runtimes == 0:
-            # Not a warning. Not having a copy of the Visual C++ redistributable
-            # lying around on your PC is the normal case; Rialto fetches it.
-            self.update_status("ℹ️ No local copy of the Visual C++ redistributable, fetching it")
-            self.download_essential_runtimes(output_path)
+            from rialto import trusted_signing
+            if trusted_signing.find_signtool() is None:
+                # Fetching it would be wasted: with nothing here to check Microsoft's signature, the
+                # file was downloaded and then discarded on every build (1.5.1, launch day).
+                self.update_status("ℹ️ No Visual C++ redistributable added: Rialto adds Microsoft's file only "
+                                   "when signtool.exe (from the Windows SDK) can check its signature. Players "
+                                   "are pointed at Microsoft's own download.")
+            else:
+                # Not a warning. Not having a copy of the Visual C++ redistributable
+                # lying around on your PC is the normal case; Rialto fetches it.
+                self.update_status("ℹ️ No local copy of the Visual C++ redistributable, fetching it")
+                self.download_essential_runtimes(output_path)
         elif missing:
             self.update_status(f"ℹ️ Not found locally: {', '.join(missing)}")
         
@@ -5724,7 +8470,7 @@ class RialtoApp:
         unverified runtime reach the Inno [Files] stage, because that binary
         is then copied into setup.exe and Authenticode-signed by the author.
         """
-        import trusted_signing
+        from rialto import trusted_signing
         trusted = trusted_signing.signed_by_microsoft(dest_path)
         if trusted is True:
             return True
@@ -5801,20 +8547,34 @@ class RialtoApp:
             "vcredist_x64.exe": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
             "vcredist_x86.exe": "https://aka.ms/vs/17/release/vc_redist.x86.exe"
         }
-        
+        # With no internet both downloads fail the same way: said once, plainly, and the build goes on
+        # without them, as 1.5.0's did (1.5.1, end-to-end runs).
+        unreachable = []
+
         for filename, url in downloads.items():
             dest_path = os.path.join(output_path, filename)
             try:
                 self.update_status(f"⬇️ Downloading {filename}...")
                 
-                from update.fetch import FetchProblem, fetch_to_file
+                from rialto.update.fetch import FetchProblem, fetch_to_file
+
+                def fetched_so_far():
+                    # fetch_to_file writes to a .download- file beside the
+                    # destination, then renames it: its size is the count.
+                    sizes = [os.path.getsize(p) for p in glob.glob(os.path.join(output_path, ".download-*"))
+                             if os.path.isfile(p)]
+                    return (None, "%.1f MB" % (max(sizes) / 1e6)) if sizes else None
+
                 try:
-                    fetch_to_file(url, dest_path,
-                                  hosts={"aka.ms", "download.visualstudio.microsoft.com",
-                                         "download.microsoft.com"},
-                                  cap=64 * 1024 * 1024)
+                    self.run_watched_call(
+                        f"Downloading {filename}",
+                        lambda _log: fetch_to_file(url, dest_path,
+                                                   hosts={"aka.ms", "download.visualstudio.microsoft.com",
+                                                          "download.microsoft.com"},
+                                                   cap=64 * 1024 * 1024),
+                        watch=fetched_so_far)
                 except FetchProblem as problem:
-                    self.update_status(f"❌ Download failed: {filename}. {problem}")
+                    unreachable.append((filename, str(problem)))
                     continue
                 
                 if not (os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024):
@@ -5835,7 +8595,17 @@ class RialtoApp:
                         os.remove(dest_path)
                 except OSError:
                     pass
+                if getattr(self, "_abandon_build", False):
+                    raise
                 self.update_status(f"❌ Download error for {filename}: {e}")
+
+        if len(unreachable) == len(downloads):
+            self.update_status("⚠️ The Visual C++ redistributables could not be downloaded, so the disc goes "
+                               "without them. Players who need them are pointed at the official Microsoft "
+                               "download. (%s)" % unreachable[0][1].strip())
+        else:
+            for filename, problem in unreachable:
+                self.update_status(f"❌ Download failed: {filename}. {problem}")
 
 
 
@@ -5885,7 +8655,8 @@ class RialtoApp:
         slice_size = self.get_disk_slice_size()
         if slice_size:
             iss_script += f"DiskSliceSize={slice_size}\n"
-        iss_script += "Compression=lzma2/fast\n"
+        choice = self.compression_var.get() if hasattr(self, "compression_var") else "Balanced"
+        iss_script += f"Compression={compression_setting(choice)}\n"
         iss_script += "InternalCompressLevel=fast\n"
         iss_script += "DisableWelcomePage=no\n"
         iss_script += "DisableReadyPage=yes\n"
@@ -5901,7 +8672,9 @@ class RialtoApp:
         iss_script += "CreateUninstallRegKey=yes\n"
         iss_script += "PrivilegesRequired=lowest\n"
         iss_script += "PrivilegesRequiredOverridesAllowed=dialog commandline\n"
-        iss_script += "MinVersion=6.1\n"
+        # 6.1sp1: Inno's own default and its recommendation, and the floor
+        # Windows 7 needs to verify a signature at all (B8).
+        iss_script += "MinVersion=6.1sp1\n"
         iss_script += "ArchitecturesAllowed=x86 x64\n"
         iss_script += "DisableDirPage=auto\n"
         iss_script += "DisableProgramGroupPage=no\n"
@@ -6065,6 +8838,17 @@ class RialtoApp:
                 'Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist '
                 'uninsneveruninstall skipifsourcedoesntexist\n'
             )
+        # Files placed on the player's PC (1.5.1, B10), from the manifest the
+        # staging step wrote beside them.
+        try:
+            with open(os.path.join(placed_files_root(output_path), "placed.json"), encoding="utf-8") as f:
+                placed = placed_files_lines(json.load(f))
+        except (OSError, ValueError):
+            placed = []
+        if placed:
+            iss_script += "\n; Files placed for the player: never over one already there unless asked,\n"
+            iss_script += "; and kept by the uninstaller unless asked.\n"
+            iss_script += "".join(line + "\n" for line in placed)
         iss_script += '\n; Runtime redistributables (only files that passed Authenticode checks)\n'
         for redist in ("vcredist_x86.exe", "vcredist_x64.exe"):
             if os.path.isfile(os.path.join(output_path, redist)):
@@ -6072,16 +8856,32 @@ class RialtoApp:
                     f'Source: "{redist}"; DestDir: "{{app}}\\runtime"; '
                     f'Flags: ignoreversion\n')
         
+        # The menu needs Windows 8.1; on Windows 7 and 8 the shortcuts start the
+        # game itself (1.5.1, B8). They read the menu_config.json staged a step
+        # earlier, so they start the exe the menu would have.
+        try:
+            with open(os.path.join(output_path, "menu", "menu_config.json"), encoding="utf-8") as f:
+                staged_config = json.load(f)
+        except (OSError, ValueError):
+            staged_config = {}
+        win7_icons, win7_runs = windows7_shortcut_lines(path_name, staged_config, bool(copied_icon_path))
+        menu_only = f"; MinVersion: {MENU_MIN_WINDOWS}" if win7_icons else ""
+        if not win7_icons:
+            self.update_status("⚠️ No game exe found for Windows 7 and 8: there the shortcuts open the menu, which needs Windows 8.1")
+
         iss_script += "\n[Icons]\n"
-        # Direct to menu.exe if it exists, otherwise to game.exe
-        iss_script += f'Name: "{{group}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"\n'
-        iss_script += f'Name: "{{userdesktop}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"; Tasks: desktopicon\n'
+        iss_script += f'Name: "{{group}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"{menu_only}\n'
+        iss_script += f'Name: "{{userdesktop}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"; Tasks: desktopicon{menu_only}\n'
+        for line in win7_icons:
+            iss_script += line + "\n"
         
         iss_script += "\n[Tasks]\n"
         iss_script += 'Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"\n'
         
         iss_script += "\n[Run]\n"
-        iss_script += f'Filename: "{{app}}\\menu\\menu.exe"; Description: "{{cm:LaunchProgram}}"; Flags: nowait postinstall skipifsilent\n'
+        iss_script += f'Filename: "{{app}}\\menu\\menu.exe"; Description: "{{cm:LaunchProgram}}"; Flags: nowait postinstall skipifsilent{menu_only}\n'
+        for line in win7_runs:
+            iss_script += line + "\n"
         
         # No [Code] section. Inno already provides IsWin64; a local function of
         # the same name was an infinite-recursion shadow of the built-in.
@@ -6295,9 +9095,12 @@ exit /b 0
             return False
 
         try:
-            import trusted_signing
-            signed, message = trusted_signing.sign_staged_menu(menu_dir, self.update_status)
+            from rialto import trusted_signing
+            signed, message = self.run_watched_call(
+                "Signing menu.exe", lambda log: trusted_signing.sign_staged_menu(menu_dir, log))
         except Exception as e:
+            if getattr(self, "_abandon_build", False):
+                raise
             # Never fail a build over the menu signature - the disc runs either way.
             self.update_status(f"⚠️ Could not sign the staged menu.exe: {e}")
             return False
@@ -6338,7 +9141,6 @@ exit /b 0
         # Enhanced PyInstaller path detection
         app_dir = os.path.dirname(os.path.abspath(__file__))
         pyinstaller_paths = [
-            os.path.join(app_dir, "python39", "venv", "Scripts", "pyinstaller.exe"),
             os.path.join(sys.prefix, "Scripts", "pyinstaller.exe"),
             "pyinstaller.exe",
             os.path.join(os.path.dirname(sys.executable), "pyinstaller.exe"),
@@ -6405,14 +9207,7 @@ exit /b 0
         
         try:
             self.update_status("🔄 Compiling PyQt5 menu with PyInstaller...")
-            result = subprocess.run(
-                build_cmd,
-                cwd=menu_dir,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                timeout=300
-            )
+            result = self.run_tool_watched(build_cmd, menu_dir, 300, "Compiling the disc menu")
             
             menu_exe = os.path.join(menu_dir, "menu.exe")
             
@@ -6447,6 +9242,8 @@ exit /b 0
                 return False
                 
         except Exception as e:
+            if getattr(self, "_abandon_build", False):
+                raise
             self.update_status(f"❌ PyInstaller execution failed: {e}")
             return False
         
@@ -6737,6 +9534,40 @@ exit
                 return candidate
         return ""
 
+    # The art a profile stores as absolute file paths (1.5.1, end-to-end runs): a 1.5.0 profile keeps
+    # them under the game folder it was saved beside, so moving that folder left every one stale.
+    REBASEABLE_FILES = (
+        ("bg_path_var", "Menu Background"),
+        ("logo_path_var", "Game Logo"),
+        ("company_logo_var", "Company Logo"),
+        ("ico_path_var", "Game Icon"),
+        ("disc_icon_var", "Disc Icon"),
+    )
+
+    def rebase_file_under_game(self, stored):
+        """A stored art file that has gone missing, found again in the game folder in use now.
+
+        The same place relative to the game folder first, the longest tail of the stored path that is
+        there (C:/old/input/Game/art/logo.png finds <game>/art/logo.png), then a file of the same name
+        directly in the game folder. Never outside the game folder, and "" when nothing matches.
+        """
+        if not stored or not self.current_game_path or os.path.isfile(stored):
+            return ""
+        game = os.path.realpath(self.current_game_path)
+        parts = [p for p in stored.replace("\\", "/").split("/") if p not in ("", ".", "..")]
+        # A drive ("C:") or a share's name never joins under the game folder.
+        if parts and (parts[0].endswith(":") or stored.replace("\\", "/").startswith("//")):
+            parts = parts[1:]
+        for start in range(len(parts)):
+            candidate = os.path.join(game, *parts[start:])
+            try:
+                inside = os.path.commonpath([game, os.path.realpath(candidate)]) == game
+            except ValueError:
+                inside = False
+            if inside and os.path.isfile(candidate):
+                return candidate
+        return ""
+
     def rebase_stale_paths(self):
         """Re-point every stale profile path that can be found again. Returns the count."""
         fixed = 0
@@ -6745,6 +9576,15 @@ exit
             if var is None:
                 continue
             found = self.rebase_under_game(var.get().strip())
+            if found:
+                var.set(found)
+                self.update_status(f"🔀 {label} re-pointed at your game folder: {found}")
+                fixed += 1
+        for attr, label in self.REBASEABLE_FILES:
+            var = getattr(self, attr, None)
+            if var is None:
+                continue
+            found = self.rebase_file_under_game(var.get().strip())
             if found:
                 var.set(found)
                 self.update_status(f"🔀 {label} re-pointed at your game folder: {found}")
@@ -6764,7 +9604,257 @@ exit
         return missing
 
     def run_build_process(self):
-        """Check what the build needs, then build."""
+        """Check what the build needs, then build, with the window answering throughout (B6)."""
+        if getattr(self, "_building", False):
+            return False
+        self._building = True
+        self._abandon_build = False
+        self.hold_page(True)
+        try:
+            return self._run_build_process()
+        finally:
+            self._building = False
+            self._build_line = None
+            self._running_tool = None
+            try:
+                self.hold_page(False)
+                self.refresh_disc_meter()
+            except tk.TclError:
+                pass
+            self.close_if_asked()
+
+    def hold_page(self, hold):
+        """While a build runs, the page and the menus take no clicks (1.5.1, B6).
+
+        The title bar still moves and minimises the window, and the log still
+        scrolls: Tk's own busy hold sits over everything else, so nothing the
+        build reads can change under it.
+        """
+        page = getattr(self, "page_frame", None)
+        held = [getattr(self, "menu_bar", None), getattr(self, "export_action_row", None),
+                getattr(self, "export_check_row", None)]
+        if page is not None:
+            held += [w for w in page.winfo_children() if w is not getattr(self, "status_text", None)]
+        for widget in held:
+            if widget is None:
+                continue
+            try:
+                widget.tk.call("tk", "busy", "hold" if hold else "forget", widget._w)
+            except tk.TclError:
+                pass
+        if hold:
+            try:
+                self.status_text.focus_set()
+            except (tk.TclError, AttributeError):
+                pass
+        # tk busy stops the pointer only. A tag at the front of every held
+        # widget's bindings swallows keys too, so Tab and Space cannot press
+        # Load Profile mid-build (security review).
+        try:
+            self.root.bind_class("RialtoBuilding", "<Key>", lambda _e: "break")
+        except (tk.TclError, AttributeError):
+            return
+
+        def walk(widget):
+            yield widget
+            for child in widget.winfo_children():
+                yield from walk(child)
+        for top in held:
+            if top is None:
+                continue
+            try:
+                for widget in walk(top):
+                    tags = tuple(t for t in widget.bindtags() if t != "RialtoBuilding")
+                    widget.bindtags((("RialtoBuilding",) + tags) if hold else tags)
+            except tk.TclError:
+                pass
+
+    def keep_window_alive(self):
+        """Let the window answer Windows between pieces of build work (B6)."""
+        try:
+            self.root.update()
+        except (tk.TclError, AttributeError):
+            pass
+        if getattr(self, "_abandon_build", False):
+            raise RuntimeError("Rialto was closed during the build")
+
+    def show_progress(self, step, fraction=None, seconds=0.0, detail=""):
+        """Move the live line under the log (B6)."""
+        self._build_line = (progress_text(step, fraction, seconds, detail), fraction)
+        try:
+            self.draw_disc_meter()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def tree_size(self, path, skip_ext=(".iso",)):
+        """(bytes, files) under `path`, leaving out finished disc images."""
+        total, count = 0, 0
+        for dirpath, _dirs, files in os.walk(path):
+            for name in files:
+                if name.lower().endswith(skip_ext):
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                    count += 1
+                except OSError:
+                    pass
+        return total, count
+
+    def run_tool_watched(self, command, cwd, timeout, step, on_line=None, watch=None):
+        """Run a tool with the window answering and the live line moving (1.5.1, B6).
+
+        Popen with its output read on two small threads into a queue; this loop,
+        on the window's own thread, drains the queue into `on_line` (which may
+        hand back (fraction, detail)), asks `watch` the same, moves the line and
+        lets the window answer. Hands back what subprocess.run would, and raises
+        subprocess.TimeoutExpired as it does, so each caller keeps its checks.
+        The build itself stays on this thread: Tkinter is not thread-safe.
+        """
+        import queue
+        import threading
+        proc = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdin=subprocess.DEVNULL, text=True, errors="replace",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self._running_tool = proc
+        lines, out, err = queue.Queue(), [], []
+
+        def pump(stream, sink):
+            for line in stream:
+                sink.append(line)
+                lines.put(line)
+
+        readers = [threading.Thread(target=pump, args=(proc.stdout, out), daemon=True),
+                   threading.Thread(target=pump, args=(proc.stderr, err), daemon=True)]
+        for reader in readers:
+            reader.start()
+        started, fraction, detail = time.monotonic(), None, ""
+
+        def drain():
+            nonlocal fraction, detail
+            while True:
+                try:
+                    line = lines.get_nowait()
+                except queue.Empty:
+                    return
+                if on_line:
+                    got = on_line(line.rstrip("\r\n"))
+                    if got:
+                        fraction, detail = got
+
+        try:
+            while True:
+                drain()
+                if watch:
+                    got = watch()
+                    if got:
+                        fraction, detail = got
+                self.show_progress(step, fraction, time.monotonic() - started, detail)
+                if proc.poll() is not None:
+                    break
+                if time.monotonic() - started > timeout:
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(command, timeout, output="".join(out), stderr="".join(err))
+                self.keep_window_alive()
+                time.sleep(0.05)
+        except BaseException:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            raise
+        for reader in readers:
+            reader.join(timeout=5)
+        drain()
+        self._running_tool = None
+        return subprocess.CompletedProcess(command, proc.returncode, "".join(out), "".join(err))
+
+    def build_ticker(self, step, total=0):
+        """A tick to call as slow work goes by: it moves the live line and lets the window answer (B6).
+
+        Call it with the bytes just done, or with nothing where there is no
+        count, and the line shows the time so far. It redraws five times a
+        second at most.
+        """
+        state = {"done": 0, "started": time.monotonic(), "shown": 0.0}
+
+        def tick(more=0):
+            state["done"] += more
+            now = time.monotonic()
+            if now - state["shown"] > 0.2:
+                state["shown"] = now
+                done = state["done"]
+                if total >= 1e8:
+                    detail = "%.1f of %.1f GB" % (done / 1e9, total / 1e9)
+                elif not total and done >= 1e6:
+                    detail = "%.0f MB" % (done / 1e6)
+                else:
+                    detail = ""
+                self.show_progress(step, done / total if total else None, now - state["started"], detail)
+                self.keep_window_alive()
+        return tick
+
+    def counting_copy(self, step, total):
+        """A copy function for shutil that moves the live line and lets the window answer (B6)."""
+        tick = self.build_ticker(step, total)
+
+        def copy(src, dst, *, follow_symlinks=True):
+            result = shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
+            try:
+                tick(os.path.getsize(src))
+            except OSError:
+                tick()
+            return result
+        return copy
+
+    def watched_copytree(self, src, dst, step, **options):
+        """shutil.copytree with the live line counting the bytes (B6)."""
+        total, _count = self.tree_size(src, skip_ext=())
+        return shutil.copytree(src, dst, copy_function=self.counting_copy(step, total), **options)
+
+    def run_watched_call(self, step, work, watch=None):
+        """Run slow Python work (a download, a signature) with the window answering (B6).
+
+        `work(log)` runs on a small thread and never touches the window: `log`
+        queues its lines, and this loop, on the window's own thread, writes
+        them to the log, moves the live line (the time so far, or what `watch`
+        hands back as (fraction, detail)) and lets the window answer. Hands back
+        what `work` returned, and raises what it raised.
+        """
+        import queue
+        import threading
+        lines, outcome = queue.Queue(), {}
+
+        def run():
+            try:
+                outcome["value"] = work(lines.put)
+            except BaseException as error:  # raised again on the window's thread
+                outcome["error"] = error
+
+        def drain():
+            while True:
+                try:
+                    self.update_status(lines.get_nowait())
+                except queue.Empty:
+                    return
+
+        worker = threading.Thread(target=run, daemon=True)
+        started, fraction, detail = time.monotonic(), None, ""
+        worker.start()
+        while worker.is_alive():
+            drain()
+            if watch:
+                got = watch()
+                if got:
+                    fraction, detail = got
+            self.show_progress(step, fraction, time.monotonic() - started, detail)
+            self.keep_window_alive()
+            worker.join(0.05)
+        drain()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
+    def _run_build_process(self):
         self.update_status("Starting build process...")
 
         # Before anything is copied: a folder the author configured and cannot
@@ -6782,23 +9872,26 @@ exit
                     % (len(missing), plural, "it" if not plural else "they",
                        detail, "it" if not plural else "them"),
                     kind="yesno"):
-                self.update_status("⛔ Build cancelled - fix the folders in Disc Extras")
-                return
+                self.update_status("⛔ Build canceled - fix the folders in Disc Extras")
+                return False
 
         if not self.run_preflight_check():
-            return
-        self.build_all()
+            return False
+        return self.build_all()
 
     def refresh_windows_icon_cache(self):
         """Refresh Windows icon cache to show updated disc icons"""
         try:
             if sys.platform == "win32":
-                # Force Windows to refresh the icon cache
+                # Force Windows to refresh the icon cache. ie4uinit.exe is a windowed program, run
+                # straight from System32: through "cmd /c" it opened a black console window at the
+                # end of every build (1.5.1, launch day).
+                ie4uinit = os.path.join(os.environ.get("SystemRoot") or "C:\\Windows", "System32", "ie4uinit.exe")
+                if not os.path.isfile(ie4uinit):
+                    return
                 self.update_status("🔄 Refreshing Windows icon cache...")
-                subprocess.run([
-                    "cmd", "/c", 
-                    "ie4uinit.exe", "-show"
-                ], capture_output=True, timeout=10)
+                subprocess.run([ie4uinit, "-show"], capture_output=True, timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 self.update_status("✅ Icon cache refreshed")
         except Exception as e:
             # Silently fail - this is just a nice-to-have
@@ -6810,9 +9903,9 @@ exit
         # Files to KEEP (everything else gets deleted)
         keep_files = []
         
-        # Add ISO files to keep
+        # Add ISO files to keep, and for a pressed disc what goes to the plant
         for item in os.listdir(output_path):
-            if item.lower().endswith(".iso"):
+            if item.lower().endswith(".iso") or item == "Chksum.md5" or item.endswith(" master sheet.txt"):
                 keep_files.append(item)
         
         # Don't keep README.txt in the output folder - it's already in the ISO
@@ -6941,7 +10034,7 @@ exit
             drive_list = ", ".join(dvd_drives)
             drive_dialog = tk.Toplevel(self.root)
             drive_dialog.title("Select DVD Drive")
-            drive_dialog.geometry("300x150")
+            self.centre_on(drive_dialog, 300, 150, self.root)
             drive_dialog.transient(self.root)
             drive_dialog.grab_set()
             
@@ -7038,9 +10131,11 @@ exit
         try:
             if os.path.exists(bonus_output):
                 shutil.rmtree(bonus_output)
-            shutil.copytree(bonus_source, bonus_output)
+            self.watched_copytree(bonus_source, bonus_output, "Copying the bonus folder")
             self.update_status("✅ Bonus content copied")
         except Exception as e:
+            if getattr(self, "_abandon_build", False):
+                raise
             self.update_status(f"⚠️ Failed to copy bonus content: {e}")
 
     def default_mod_dir(self):
@@ -7114,9 +10209,11 @@ exit
         try:
             if os.path.exists(mods_output):
                 shutil.rmtree(mods_output)
-            shutil.copytree(mods_source, mods_output)
+            self.watched_copytree(mods_source, mods_output, "Copying the mod folder")
             self.update_status(f"✅ Mod folder copied: {staged_name}")
         except Exception as e:
+            if getattr(self, "_abandon_build", False):
+                raise
             self.update_status(f"⚠️ Failed to copy the mod folder: {e}")
 
     def detect_mod_launcher_exe(self, output_path):
@@ -7166,6 +10263,8 @@ exit
         try:
             copied_files = 0
             main_py_file = None
+            total, _count = self.tree_size(source_dir, skip_ext=())
+            copy = self.counting_copy("Copying the game", total)
             
             for item in os.listdir(source_dir):
                 source_path = os.path.join(source_dir, item)
@@ -7182,15 +10281,15 @@ exit
                 
                 # Always include game_logo.png
                 if item == "game_logo.png":
-                    shutil.copy2(source_path, dest_path)
+                    copy(source_path, dest_path)
                     copied_files += 1
                     self.update_status(f"📁 Copied: {item} (game logo)")
                 elif os.path.isfile(source_path):
-                    shutil.copy2(source_path, dest_path)
+                    copy(source_path, dest_path)
                     copied_files += 1
                     self.update_status(f"📁 Copied: {item}")
                 elif os.path.isdir(source_path):
-                    shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+                    shutil.copytree(source_path, dest_path, dirs_exist_ok=True, copy_function=copy)
                     copied_files += 1
                     self.update_status(f"📁 Copied folder: {item}")
             
@@ -7275,8 +10374,24 @@ exit
 
     def report_disc_media_fit(self, size_bytes):
         """Tell the user which physical media the ISO fits on (CD/DVD/Blu-ray)."""
+        # The 8 cm minis (1.5.1, minis) are named only when one is the Target
+        # Media: then the line confirms it, and every other small game's line
+        # stays as short as it was.
+        mini = self.target_media_var.get() in MINI_DISC_MEDIA
+        if self.pressed_disc_on():
+            sectors = size_bytes // SECTOR_BYTES
+            pressed = [name for name, limit in (("8 cm CD-ROM", MINI_CD_SECTORS if mini else 0),
+                                                 ("CD-ROM", 360_000),
+                                                 ("8 cm DVD-5", MINI_DVD5_SECTORS if mini else 0),
+                                                 ("DVD-5", DVD5_SECTORS),
+                                                 ("DVD-9", 2 * DVD9_LAYER0_SECTORS)) if sectors <= limit]
+            self.update_status(f"💿 Presses as: {', '.join(pressed)}" if pressed
+                               else "⚠️ The image is bigger than a DVD-9 can press")
+            return
         media_types = [
+            ("Mini CD-R (210 MB, 8 cm)", 221_184_000 if mini else 0),
             ("CD-R (700 MB)", 700 * 1024 * 1024),
+            ("Mini DVD-R (1.4 GB, 8 cm)", 1_460_000_000 if mini else 0),
             ("DVD-R (4.7 GB)", 4_700_000_000),
             ("DVD-R DL (8.5 GB)", 8_540_000_000),
             ("Blu-ray BD-R (25 GB)", 25_000_000_000),
@@ -7292,9 +10407,15 @@ exit
             self.update_status("ℹ️ Note: Blu-ray data discs need a BD burner; most game discs target DVD-R.")
 
     def create_iso(self, output_path, meta):
-        """Build the ISO with mkisofs or oscdimg, or fall back to a ZIP"""
+        """Build the ISO with mkisofs or oscdimg, or fall back to a ZIP.
+
+        self.images_made lists every disc image this build finished (one, or each disc of a set), and only
+        those: the master sheet, Chksum.md5 and the Build Queue's summary are made from it, never from
+        whatever *.iso lies in the folder. A tool that stops at 30 minutes stops the build.
+        """
         game_name = meta["GameName"]
         iso_path = os.path.join(output_path, f"{game_name}.iso")
+        self.images_made = []
 
         # Volume label: use the Disc Name field (same as autorun.inf) when set,
         # falling back to the folder name. 16 chars for Joliet compatibility.
@@ -7324,8 +10445,13 @@ exit
         capacity = self.get_target_media_capacity()
         if capacity:
             total_size = self._fileset_size(output_path, iso_files)
-            if total_size > capacity - self.MEDIA_RESERVE:
-                self.update_status(f"📀 Build is {total_size / 1e9:.1f} GB, over the {self.target_media_var.get()} limit")
+            # The same limit the set's discs are packed to: a payload that fits
+            # one disc is one disc, never a one-disc "set".
+            if total_size > capacity - self.SPAN_MARGIN:
+                # In MB under a gigabyte, so a mini's "0.3 GB" never sits beside "210 MB".
+                weight = (f"{total_size / 1e9:.1f} GB" if total_size >= 1e9
+                          else f"{total_size // 1_000_000} MB")
+                self.update_status(f"📀 Build is {weight}, over the {self.target_media_var.get()} limit")
                 self.create_spanned_isos(output_path, meta, disc_label, capacity)
                 return
 
@@ -7334,116 +10460,84 @@ exit
         if needs_udf:
             self.update_status("💿 Large files detected: using the UDF disc format")
         
-        # Try to locate mkisofs or oscdimg
-        mkisofs, oscdimg = find_iso_tools()
-        
-        tool = None
-        if mkisofs:
-            self.update_status("✅ Found mkisofs")
-            tool = [mkisofs, "-o", iso_path, "-J", "-R", "-V", disc_label]
-            if needs_udf:
-                tool += ["-udf", "-iso-level", "3"]
-            tool += iso_files
-
-        elif oscdimg:
-            # For oscdimg, we need to create a temp folder with only the files we want
-            temp_iso_folder = os.path.join(output_path, "temp_iso_build")
-            if os.path.exists(temp_iso_folder):
-                shutil.rmtree(temp_iso_folder)
-            os.makedirs(temp_iso_folder)
-    
-            # Copy only the files we want to the temp folder
-            for item in iso_files:
-                src_path = os.path.join(output_path, item)
-                if os.path.exists(src_path):
-                    dst_path = os.path.join(temp_iso_folder, item)
-                    if os.path.isdir(src_path):
-                        shutil.copytree(src_path, dst_path)
-                    else:
-                        shutil.copy2(src_path, dst_path)
-    
-            tool = [oscdimg, "-m", "-u2" if needs_udf else "-j1", f"-l{disc_label}", temp_iso_folder, iso_path]
-            
-        else:
+        # Which tool writes the image (1.5.1): mkisofs on PATH, then oscdimg (PATH or the Windows ADK), then
+        # the mkisofs Rialto carries; each in turn until one works, and the ZIP only when none does. A
+        # plant's master is made with mkisofs only: oscdimg is licensed for producing Microsoft-authorized
+        # content, as it prints itself (disc_image_tools leaves it out of a pressed disc's list).
+        tools = disc_image_tools(self.pressed_disc_on())
+        if not tools:
             self.update_status("⚠️ No ISO tool found. Install the Windows ADK with Deployment Tools ticked (oscdimg), or put mkisofs on your PATH")
             # Fallback to Python ZIP method (but still create .iso extension)
-            self.create_python_iso_fallback(output_path, iso_path, iso_files, meta)
+            self._iso_fallback_unless_pressed(output_path, iso_path, iso_files, meta)
             return
-        
-        # Run the ISO creation tool
-        try:
-            self.update_status("🔄 Running ISO creation...")
-            result = subprocess.run(
-                tool,
-                cwd=output_path,
-                check=True,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+
+        for attempt, (kind, tool_path, carried) in enumerate(tools):
+            words = tool_words(kind, tool_path, carried)
+            if attempt:
+                self.update_status("🔄 Trying the next disc image tool: " + words)
+            else:
+                self.update_status("✅ Writing the disc image with " + words)
+            copy = None
+            if kind == "oscdimg":
+                copy = self.counting_copy("Preparing the disc image", self._fileset_size(output_path, iso_files))
+            try:
                 # Thirty minutes, not two. Two minutes does not image a DVD on
                 # any real machine: a 4 GB payload on a spinning disk takes
                 # longer than that before it has finished reading, so the
                 # timeout fired on ordinary discs rather than on stuck ones.
                 # A genuinely stuck tool is still stopped after half an hour.
-                timeout=1800
-            )
-            
-            # Check if ISO was created successfully
-            if os.path.exists(iso_path):
+                # Watched (1.5.1, B6): the image grows on disk as the tool writes
+                # it, which gives a percentage for mkisofs and oscdimg alike.
+                made, why = self._write_one_image(kind, tool_path, output_path, iso_path, iso_files, disc_label,
+                                                  needs_udf, "temp_iso_build", "Writing the disc image", copy)
+            except subprocess.TimeoutExpired:
+                # Its own branch, and it does NOT fall back.
+                #
+                # A timeout used to land in the bare `except Exception` below and
+                # be answered with the ZIP fallback, which writes an archive
+                # carrying the .iso extension and reports success. So the one
+                # case where the real tool was probably still working correctly
+                # produced a file that is not a disc image, named as though it
+                # were, announced with a tick.
+                #
+                # Nor does it return as if all were well (bugs review, 1.5.1): the
+                # half-written image used to stay, and a pressed disc then got a
+                # checksum and a master sheet for it, with "Build complete". The
+                # partial is removed and the build stops, pressed or not.
+                self.update_status("❌ ISO creation timed out after 30 minutes")
+                self._remove_partial_iso(iso_path)
+                raise RuntimeError("the disc image was not finished after 30 minutes, so no image was made. "
+                                   "Check free disk space and that no scanner is holding the build folder, "
+                                   "then build again")
+            except Exception as e:
+                if getattr(self, "_abandon_build", False):
+                    self._remove_partial_iso(iso_path)
+                    raise  # Rialto was closed: no fallback after the window has gone
+                made, why = False, str(e)
+
+            if made:
+                self.images_made = [iso_path]
                 iso_size = os.path.getsize(iso_path) / (1024 * 1024)  # MB
                 self.update_status(f"✅ ISO created successfully: {iso_size:.1f} MB")
                 self.report_disc_media_fit(os.path.getsize(iso_path))
                 self.refresh_windows_icon_cache()
-                
-                self.update_status("📀 Ready to burn: Use disc burning software to burn this ISO")
-                temp_iso_folder = os.path.join(output_path, "temp_iso_build")
-                if os.path.exists(temp_iso_folder):
-                    try:
-                        shutil.rmtree(temp_iso_folder)
-                        self.update_status("🧹 Cleaned temp ISO build folder")
-                    except OSError:
-                        pass
+                if self.pressed_disc_on():
+                    self.update_status("📀 Ready for the plant: send the image with Chksum.md5 and the master sheet")
+                else:
+                    self.update_status("📀 Ready to burn: Use disc burning software to burn this ISO")
+                return
+            self.update_status(f"❌ ISO creation failed with {words}: {why}")
+            self._remove_partial_iso(iso_path)
 
-            else:
-                self.update_status("❌ ISO tool ran but no file was generated")
-                temp_iso_folder = os.path.join(output_path, "temp_iso_build")
-                if os.path.exists(temp_iso_folder):
-                    try:
-                        shutil.rmtree(temp_iso_folder)
-                        self.update_status("🧹 Cleaned temp ISO build folder")
-                    except OSError:
-                        pass
-                self.create_python_iso_fallback(output_path, iso_path, iso_files, meta)
-                
-        except subprocess.CalledProcessError as e:
-            self.update_status(f"❌ ISO creation failed: {e}")
-            if e.stderr:
-                self.update_status(f"   Error details: {e.stderr.strip()}")
-            self.update_status("🔄 Trying Python fallback method...")
-            self.create_python_iso_fallback(output_path, iso_path, iso_files, meta)
-            
-        except subprocess.TimeoutExpired:
-            # Its own branch, and it does NOT fall back.
-            #
-            # A timeout used to land in the bare `except Exception` below and
-            # be answered with the ZIP fallback, which writes an archive
-            # carrying the .iso extension and reports success. So the one
-            # case where the real tool was probably still working correctly
-            # produced a file that is not a disc image, named as though it
-            # were, announced with a tick.
-            #
-            # A partial ISO is left where it is: the tool may have been most
-            # of the way through, and it is evidence either way.
-            self.update_status("❌ ISO creation timed out after 30 minutes")
-            self.update_status(
-                "   The disc image was NOT created. Any partial file is left in place. "
-                "Check free disk space and that no scanner is holding the build folder, "
-                "then run the build again."
-            )
+        self.update_status("🔄 Trying Python fallback method...")
+        self._iso_fallback_unless_pressed(output_path, iso_path, iso_files, meta)
 
-        except Exception as e:
-            self.update_status(f"❌ ISO creation error: {e}")
-            self.create_python_iso_fallback(output_path, iso_path, iso_files, meta)
+    def _iso_fallback_unless_pressed(self, output_path, iso_path, iso_files, meta):
+        """The ZIP fallback, except for a pressed disc: a ZIP is not a master, so that build stops."""
+        if self.pressed_disc_on():
+            self._remove_partial_iso(iso_path)
+            raise RuntimeError("the disc image for the plant could not be made with mkisofs, see above")
+        self.create_python_iso_fallback(output_path, iso_path, iso_files, meta)
 
     def create_python_iso_fallback(self, output_path, iso_path, iso_files, meta):
         """Last-resort archive when no ISO tool is available. NOT a disc image.
@@ -7923,7 +11017,13 @@ pause
         timestamp = time.strftime("%H:%M:%S")
         formatted_message = f"[{timestamp}] {message}"
         
-        self.status_text.configure(state="normal")
+        batch = getattr(self, "_batch", None)
+        if batch is not None:
+            batch["lines"].append(message)
+        try:
+            self.status_text.configure(state="normal")
+        except tk.TclError:
+            return  # the window was closed during a build
         self.status_text.insert("end", formatted_message + "\n")
         
         # Color code based on message type
@@ -8016,7 +11116,9 @@ pause
         # Create a small listener window to restore Rialto
         restore_popup = tk.Toplevel()
         restore_popup.title("Restore Rialto")
-        restore_popup.geometry("200x60+100+100")
+        # Near the top left corner of the monitor Rialto is on, which is not always the main one's 100, 100.
+        left, top, _width, _height = self.available_space(self.root)
+        self.place_window(restore_popup, 200, 60, left + 100, top + 100, near=self.root)
         restore_popup.attributes("-topmost", True)
         restore_popup.configure(bg=self.dark_theme["bg"])
 
@@ -8028,6 +11130,11 @@ pause
                   bg=self.dark_theme["button_bg"],
                   fg=self.dark_theme["button_fg"],
                   command=lambda: self._restore_window(restore_popup)).pack(pady=5)
+
+        # As tall as what it holds: at 60 lines the Restore button was cut off half way down.
+        restore_popup.update_idletasks()
+        self.place_window(restore_popup, 200, max(60, restore_popup.winfo_reqheight()),
+                          left + 100, top + 100, near=self.root)
 
     def _restore_window(self, popup):
         popup.destroy()
@@ -8350,6 +11457,9 @@ import os
 import json
 import shutil
 import subprocess
+import ctypes
+import time
+import unicodedata
 from PyQt5 import QtWidgets, QtGui, QtCore
 
 
@@ -8389,6 +11499,58 @@ MENU_CONFIG = load_menu_config()
 _raw_title = str(MENU_CONFIG.get("title") or "Game")
 _raw_title = ''.join(c if (c >= ' ' and c != '\\x7f') else ' ' for c in _raw_title)
 MENU_TITLE = _raw_title.strip()[:200] or "Game"
+
+# The player's own choices (1.5.1, B9): which games they starred to the top of
+# both lists, how the Play page is sorted, and the menu language they picked.
+# Kept on this PC under the disc's title, never on the disc, and read back with
+# suspicion, because anything on the PC can rewrite the file.
+#
+# Every game is listed under PLAY GAMES, so a star no longer competes for one of
+# three places on the main menu: a player can star as many as they like. The cap
+# only bounds what a rewritten file can make the menu hold.
+MAX_STARS = 200
+
+
+def player_prefs_path(title):
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    key = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:80] or "Game"
+    return os.path.join(base, "Rialto Disc Menu", key, "player.json")
+
+
+def read_player_prefs(title):
+    try:
+        path = player_prefs_path(title)
+        if os.path.getsize(path) > 64 * 1024:
+            return {"stars": [], "sort": "disc", "lang": ""}
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            raw = data.get("stars")
+            stars = []
+            for x in (raw[-MAX_STARS:] if isinstance(raw, list) else []):
+                if isinstance(x, str) and len(x) < 400 and x not in stars:
+                    stars.append(x)
+            # Only a name the menu has a translation for is ever used; see GameMenu.
+            lang = data.get("lang")
+            return {"stars": stars,
+                    "sort": "az" if data.get("sort") == "az" else "disc",
+                    "lang": lang if isinstance(lang, str) and len(lang) < 40 else ""}
+    except Exception:
+        # Anything at all: a file nested deep enough raises RecursionError, and a
+        # menu that will not start on this PC is worse than one that forgot.
+        pass
+    return {"stars": [], "sort": "disc", "lang": ""}
+
+
+def write_player_prefs(title, prefs):
+    path = player_prefs_path(title)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(prefs, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
 
 # Compatibility mode: a launch argument the author's game already understands,
 # offered as a button so the player never has to type one, such as a switch
@@ -8430,6 +11592,56 @@ try:
 except Exception:
     pass
 
+# Controller support (1.5.1): XInput, which every Xbox-style pad speaks and Windows has carried
+# since Windows 8 (xinput1_4.dll), read through ctypes. Nothing new rides on the disc and the
+# player installs nothing. A PlayStation or Switch pad works through Steam Input or its own
+# XInput mode. Loaded from System32 by its full path, never from the disc or the install folder.
+PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT = 0x0001, 0x0002, 0x0004, 0x0008
+PAD_START = 0x0010
+PAD_A, PAD_B, PAD_Y = 0x1000, 0x2000, 0x8000
+PAD_STICK = 12000  # past a third of its travel, the left stick counts as the D-pad...
+PAD_STICK_OFF = 8000  # ...and stays pressed until it is back under a quarter, so a resting thumb never
+                      # flickers across one mark and steps the menu on every crossing
+PAD_STEER = PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT
+
+
+class XInputGamepad(ctypes.Structure):
+    _fields_ = [("wButtons", ctypes.c_ushort), ("bLeftTrigger", ctypes.c_ubyte),
+                ("bRightTrigger", ctypes.c_ubyte), ("sThumbLX", ctypes.c_short),
+                ("sThumbLY", ctypes.c_short), ("sThumbRX", ctypes.c_short), ("sThumbRY", ctypes.c_short)]
+
+
+class XInputState(ctypes.Structure):
+    _fields_ = [("dwPacketNumber", ctypes.c_uint), ("Gamepad", XInputGamepad)]
+
+
+def load_xinput():
+    """XInputGetState from Windows' own XInput, or None when this Windows has none."""
+    system = ""
+    try:
+        found = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.kernel32.GetSystemDirectoryW(found, 260):
+            system = found.value
+    except Exception:
+        pass
+    if not system and os.environ.get("SystemRoot"):
+        system = os.path.join(os.environ["SystemRoot"], "System32")
+    if not system:
+        return None
+    for name in ("xinput1_4.dll", "xinput9_1_0.dll", "xinput1_3.dll"):
+        path = os.path.join(system, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            get_state = ctypes.WinDLL(path).XInputGetState
+        except (OSError, AttributeError):
+            continue
+        get_state.argtypes = [ctypes.c_uint, ctypes.POINTER(XInputState)]
+        get_state.restype = ctypes.c_uint
+        return get_state
+    return None
+
+
 class GameMenu(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -8459,6 +11671,7 @@ class GameMenu(QtWidgets.QWidget):
         self.menu_title = MENU_TITLE
         self.games = [g for g in self.menu_config.get("games", [])
                       if isinstance(g, dict) and g.get("exe")]
+        self.player_prefs = read_player_prefs(MENU_TITLE)
 
         # Comprehensive language translations
         self.translations = {
@@ -8477,6 +11690,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "يفتح أداة المودات الموجودة على هذا القرص.",
                 "tip_steam": "يضيف اللعبة إلى مكتبة Steam لديك لتشغيلها من هناك.",
                 "tip_uninstall": "يزيل اللعبة المثبتة. لن يتم المساس بملفات الحفظ الخاصة بك.",
+                "choose_game": "اختر لعبتك", "sort_disc": "بترتيب القرص", "sort_az": "أبجديًا",
+                "tip_star": "ضع نجمة على لعبة لتظهر في أعلى القائمة الرئيسية.",
+                "play_games": "العب الألعاب", "steam": "أضف إلى Steam",
+                "ok": "موافق",
+                "steam_none_title": "لا شيء لإضافته",
+                "steam_none": "لم يتم العثور على أي لعبة لإضافتها إلى مكتبة Steam لديك.",
+                "steam_none_detail": "ثبّت اللعبة من القرص أولاً، ثم حاول مرة أخرى.",
+                "steam_missing_title": "لم يتم العثور على Steam",
+                "steam_missing": "لم يتم العثور على أي ملف تعريف Steam على هذا الكمبيوتر.",
+                "steam_missing_detail": "ثبّت Steam وسجّل الدخول مرة واحدة، ثم حاول مرة أخرى. لا ينشئ Steam المجلد المطلوب إلا بعد أول تسجيل دخول.",
+                "steam_running_title": "أغلق Steam أولاً",
+                "steam_running": "Steam قيد التشغيل، لذلك لم تتم إضافة أي شيء بعد.",
+                "steam_running_why": "سيتراجع Steam عن الإضافة: فهو يحتفظ بقائمة الألعاب غير التابعة لـ Steam في الذاكرة ويعيد كتابة تلك النسخة عند إغلاقه.",
+                "steam_running_detail": "أغلق Steam تمامًا: انقر بزر الماوس الأيمن على أيقونة Steam في منطقة الإعلامات بجوار الساعة، واختر خروج. إغلاق النافذة لا يكفي. ثم اضغط «أضف إلى Steam» مرة أخرى.",
+                "steam_added_title": "تمت الإضافة إلى Steam",
+                "steam_added": "تمت إضافة %s إلى مكتبة Steam لديك، ضمن الألعاب غير التابعة لـ Steam.",
+                "steam_added_detail": "ستجدها هناك في المرة القادمة التي تشغّل فيها Steam.",
+                "steam_already_title": "موجودة في Steam بالفعل",
+                "steam_already": "سبق أن أُضيفت %s إلى مكتبة Steam لديك.",
+                "steam_already_detail": "لم يتم تغيير أي شيء. احذفها من Steam أولاً إذا أردت إضافتها مرة أخرى.",
+                "steam_failed_title": "تعذّرت الإضافة إلى Steam",
+                "steam_blocked": "تعذّر تحديث قائمة Steam للألعاب غير التابعة لـ Steam.",
+                "steam_blocked_detail": "أغلق Steam تمامًا وحاول مرة أخرى. لم يتم تغيير أي شيء، والقائمة السابقة كما هي.",
+                "steam_unread": "تعذّرت قراءة قائمة Steam للألعاب غير التابعة لـ Steam.",
+                "steam_unread_detail": "أغلق Steam تمامًا وحاول مرة أخرى.",
+                "uninstaller_detail": "ألغِ تثبيت اللعبة بدلاً من ذلك من Windows: الإعدادات، ثم التطبيقات.",
+                "bonus_detail": "تم إنشاء هذا القرص بدون مجلد للمحتوى الإضافي.",
+                "mods_detail": "لم يتم العثور على أداة مودات في مجلد المودات على هذا القرص.",
+                "looked_for": "تم البحث عن: %s",
+                "looked_in": "تم البحث في:",
+                "and_more": "... و%d أخرى",
+                "play_again": "جرّب الضغط على «العب اللعبة» مرة أخرى أولاً: قد يكون المجلد المثبّت حديثًا لا يزال قيد الفحص. إذا استمر الفشل، فربما لم يكتمل نسخ مجلد اللعبة.",
                 "yes": "نعم", "no": "لا", "cancel": "إلغاء"
             },
             "Bulgarian": {
@@ -8494,6 +11739,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Отваря инструмента за модове от този диск.",
                 "tip_steam": "Добавя играта към вашата Steam библиотека, за да я стартирате оттам.",
                 "tip_uninstall": "Премахва инсталираната игра. Запазените игри не се засягат.",
+                "choose_game": "Изберете игра", "sort_disc": "Както на диска", "sort_az": "От А до Я",
+                "tip_star": "Отбележете игра със звезда, за да се появи най-горе в главното меню.",
+                "play_games": "Играй", "steam": "Добави в Steam",
+                "ok": "OK",
+                "steam_none_title": "Няма какво да се добави",
+                "steam_none": "Не е намерена игра, която да бъде добавена към вашата Steam библиотека.",
+                "steam_none_detail": "Първо инсталирайте играта от диска, след това опитайте отново.",
+                "steam_missing_title": "Steam не е намерен",
+                "steam_missing": "На този компютър не е намерен профил в Steam.",
+                "steam_missing_detail": "Инсталирайте Steam и влезте поне веднъж, след това опитайте отново. Steam създава нужната папка едва след първото влизане.",
+                "steam_running_title": "Първо излезте от Steam",
+                "steam_running": "Steam работи, затова все още нищо не е добавено.",
+                "steam_running_why": "Steam би отменил промяната: той пази списъка си с игри извън Steam в паметта и записва това копие обратно при затваряне.",
+                "steam_running_detail": "Излезте напълно от Steam: щракнете с десния бутон върху иконата на Steam в областта за уведомяване до часовника и изберете Изход. Затварянето на прозореца не е достатъчно. След това натиснете „Добави в Steam“ отново.",
+                "steam_added_title": "Добавено в Steam",
+                "steam_added": "%s вече е във вашата Steam библиотека, сред игрите извън Steam.",
+                "steam_added_detail": "Ще се появи там следващия път, когато стартирате Steam.",
+                "steam_already_title": "Вече е в Steam",
+                "steam_already": "%s вече е във вашата Steam библиотека.",
+                "steam_already_detail": "Нищо не е променено. Ако искате да добавите играта отново, първо я премахнете от Steam.",
+                "steam_failed_title": "Неуспешно добавяне в Steam",
+                "steam_blocked": "Списъкът на Steam с игри извън Steam не можа да бъде обновен.",
+                "steam_blocked_detail": "Затворете Steam напълно и опитайте отново. Нищо не е променено и предишният списък е непокътнат.",
+                "steam_unread": "Списъкът на Steam с игри извън Steam не можа да бъде прочетен.",
+                "steam_unread_detail": "Затворете Steam напълно и опитайте отново.",
+                "uninstaller_detail": "Вместо това деинсталирайте играта от Настройки на Windows, Приложения.",
+                "bonus_detail": "Този диск е създаден без папка с бонус съдържание.",
+                "mods_detail": "В папката с модове на този диск не е намерен инструмент за модове.",
+                "looked_for": "Търсено: %s",
+                "looked_in": "Търсено в:",
+                "and_more": "... и още %d",
+                "play_again": "Първо опитайте „Играй“ още веднъж: току-що инсталирана папка понякога все още се сканира. Ако продължава да не става, копирането на папката на играта може да не е завършило.",
                 "yes": "Да", "no": "Не", "cancel": "Отказ"
             },
             "Chinese (Simplified)": {
@@ -8503,7 +11780,7 @@ class GameMenu(QtWidgets.QWidget):
                 "bonus_not_found": "找不到额外内容！",
                 "mods_not_found": "找不到模组工具！",
                 "uninstaller_not_found": "找不到卸载程序！",
-                "confirm_uninstall": "您确定要卸载此游戏吗？",
+                "confirm_uninstall": "你确定要卸载此游戏吗？",
                 "install": "安装游戏",
                 "tip_install": "运行本光盘上的安装程序。",
                 "tip_compat": "以适合较旧或不受支持的显卡的设置启动游戏。",
@@ -8511,6 +11788,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "打开本光盘附带的模组工具。",
                 "tip_steam": "将游戏添加到你的 Steam 库，以便从那里启动。",
                 "tip_uninstall": "移除已安装的游戏。你的存档不会被删除。",
+                "choose_game": "选择你的游戏", "sort_disc": "按光盘顺序", "sort_az": "按名称",
+                "tip_star": "为游戏加上星标，它就会排在主菜单的最上方。",
+                "play_games": "开始游戏", "steam": "添加到 Steam",
+                "ok": "确定",
+                "steam_none_title": "没有可添加的游戏",
+                "steam_none": "没有找到可以添加到你的 Steam 库的游戏。",
+                "steam_none_detail": "请先从光盘安装游戏，然后再试一次。",
+                "steam_missing_title": "找不到 Steam",
+                "steam_missing": "这台电脑上没有找到 Steam 用户资料。",
+                "steam_missing_detail": "请安装 Steam 并登录一次，然后再试一次。Steam 只有在首次登录后才会创建所需的文件夹。",
+                "steam_running_title": "请先退出 Steam",
+                "steam_running": "Steam 正在运行，所以还没有添加任何内容。",
+                "steam_running_why": "Steam 会撤销这项更改：它把非 Steam 游戏列表保存在内存中，并在关闭时把这份副本写回去。",
+                "steam_running_detail": "请完全退出 Steam：在时钟旁的通知区域右键单击 Steam 图标，然后选择退出。只关闭窗口是不够的。之后再按一次添加到 Steam 按钮。",
+                "steam_added_title": "已添加到 Steam",
+                "steam_added": "%s 现已添加到你的 Steam 库中，位于非 Steam 游戏下。",
+                "steam_added_detail": "下次启动 Steam 时就会看到它。",
+                "steam_already_title": "已在 Steam 中",
+                "steam_already": "%s 已在你的 Steam 库中。",
+                "steam_already_detail": "未做任何更改。如果想重新添加，请先从 Steam 中移除它。",
+                "steam_failed_title": "无法添加到 Steam",
+                "steam_blocked": "无法更新 Steam 的非 Steam 游戏列表。",
+                "steam_blocked_detail": "请完全关闭 Steam 后再试一次。未做任何更改，原有列表保持不变。",
+                "steam_unread": "无法读取 Steam 的非 Steam 游戏列表。",
+                "steam_unread_detail": "请完全关闭 Steam 后再试一次。",
+                "uninstaller_detail": "请改为在 Windows 设置 > 应用 中卸载此游戏。",
+                "bonus_detail": "这张光盘制作时没有附带额外内容文件夹。",
+                "mods_detail": "在本光盘的模组文件夹中找不到模组工具。",
+                "looked_for": "查找的文件：%s",
+                "looked_in": "查找位置：",
+                "and_more": "……还有 %d 个",
+                "play_again": "请先再按一次开始游戏：刚安装好的文件夹有时仍在被扫描。如果仍然失败，可能是游戏文件夹还没有复制完成。",
                 "yes": "是", "no": "否", "cancel": "取消"
             },
             "Chinese (Traditional)": {
@@ -8520,7 +11829,7 @@ class GameMenu(QtWidgets.QWidget):
                 "bonus_not_found": "找不到額外內容！",
                 "mods_not_found": "找不到模組工具！",
                 "uninstaller_not_found": "找不到移除程式！",
-                "confirm_uninstall": "您確定要移除此遊戲嗎？",
+                "confirm_uninstall": "你確定要移除此遊戲嗎？",
                 "install": "安裝遊戲",
                 "tip_install": "執行本光碟上的安裝程式。",
                 "tip_compat": "以適合較舊或不支援的顯示卡的設定啟動遊戲。",
@@ -8528,6 +11837,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "開啟本光碟附帶的模組工具。",
                 "tip_steam": "將遊戲加入你的 Steam 收藏庫，以便從那裡啟動。",
                 "tip_uninstall": "移除已安裝的遊戲。你的存檔不會被刪除。",
+                "choose_game": "選擇你的遊戲", "sort_disc": "按光碟順序", "sort_az": "按名稱",
+                "tip_star": "為遊戲加上星號，它就會排在主選單的最上方。",
+                "play_games": "開始遊戲", "steam": "加入 Steam",
+                "ok": "確定",
+                "steam_none_title": "沒有可加入的遊戲",
+                "steam_none": "找不到可以加入你的 Steam 收藏庫的遊戲。",
+                "steam_none_detail": "請先從光碟安裝遊戲，然後再試一次。",
+                "steam_missing_title": "找不到 Steam",
+                "steam_missing": "這台電腦上找不到 Steam 使用者資料。",
+                "steam_missing_detail": "請安裝 Steam 並登入一次，然後再試一次。Steam 只有在第一次登入後才會建立所需的資料夾。",
+                "steam_running_title": "請先結束 Steam",
+                "steam_running": "Steam 正在執行，所以尚未加入任何項目。",
+                "steam_running_why": "Steam 會復原這項變更：它會把非 Steam 遊戲清單保存在記憶體中，並在關閉時把這份副本寫回去。",
+                "steam_running_detail": "請完全結束 Steam：在時鐘旁的通知區域中以滑鼠右鍵按一下 Steam 圖示，然後選擇「結束」。只關閉視窗是不夠的。接著再按一次「加入 Steam」。",
+                "steam_added_title": "已加入 Steam",
+                "steam_added": "%s 現已加入你的 Steam 收藏庫，位於非 Steam 遊戲之下。",
+                "steam_added_detail": "下次啟動 Steam 時就會看到它。",
+                "steam_already_title": "已在 Steam 中",
+                "steam_already": "%s 已在你的 Steam 收藏庫中。",
+                "steam_already_detail": "未做任何變更。若想重新加入，請先從 Steam 移除它。",
+                "steam_failed_title": "無法加入 Steam",
+                "steam_blocked": "無法更新 Steam 的非 Steam 遊戲清單。",
+                "steam_blocked_detail": "請完全關閉 Steam 後再試一次。未做任何變更，原本的清單維持不變。",
+                "steam_unread": "無法讀取 Steam 的非 Steam 遊戲清單。",
+                "steam_unread_detail": "請完全關閉 Steam 後再試一次。",
+                "uninstaller_detail": "請改從 Windows「設定」中的「應用程式」移除此遊戲。",
+                "bonus_detail": "這張光碟製作時沒有附帶額外內容資料夾。",
+                "mods_detail": "在本光碟的模組資料夾中找不到模組工具。",
+                "looked_for": "尋找的檔案：%s",
+                "looked_in": "尋找位置：",
+                "and_more": "……還有 %d 個",
+                "play_again": "請先再按一次「開始遊戲」：剛安裝好的資料夾有時仍在掃描中。如果還是失敗，可能是遊戲資料夾尚未複製完成。",
                 "yes": "是", "no": "否", "cancel": "取消"
             },
             "Croatian": {
@@ -8545,6 +11886,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Otvara alat za modove s ovog diska.",
                 "tip_steam": "Dodaje igru u vašu Steam biblioteku kako biste je pokrenuli odande.",
                 "tip_uninstall": "Uklanja instaliranu igru. Vaši spremljeni podaci ostaju netaknuti.",
+                "choose_game": "Odaberite igru", "sort_disc": "Kao na disku", "sort_az": "Od A do Ž",
+                "tip_star": "Označite igru zvjezdicom i bit će na vrhu glavnog izbornika.",
+                "play_games": "Igraj", "steam": "Dodaj u Steam",
+                "ok": "U redu",
+                "steam_none_title": "Nema se što dodati",
+                "steam_none": "Nije pronađena nijedna igra za dodavanje u vašu Steam biblioteku.",
+                "steam_none_detail": "Najprije instalirajte igru s diska, a zatim pokušajte ponovno.",
+                "steam_missing_title": "Steam nije pronađen",
+                "steam_missing": "Na ovom računalu nije pronađen nijedan Steam profil.",
+                "steam_missing_detail": "Instalirajte Steam i jednom se prijavite, a zatim pokušajte ponovno. Steam tek nakon prve prijave stvara mapu koja je za ovo potrebna.",
+                "steam_running_title": "Najprije izađite iz Steama",
+                "steam_running": "Steam je pokrenut, pa još ništa nije dodano.",
+                "steam_running_why": "Steam bi to poništio: svoj popis igara izvan Steama drži u memoriji i pri zatvaranju zapisuje tu kopiju natrag.",
+                "steam_running_detail": "Potpuno izađite iz Steama: desnom tipkom miša kliknite ikonu Steama u području obavijesti pokraj sata i odaberite Exit. Zatvaranje prozora nije dovoljno. Zatim ponovno pritisnite „Dodaj u Steam”.",
+                "steam_added_title": "Dodano u Steam",
+                "steam_added": "%s sada se nalazi u vašoj Steam biblioteci, među igrama izvan Steama.",
+                "steam_added_detail": "Bit će ondje sljedeći put kad pokrenete Steam.",
+                "steam_already_title": "Već je u Steamu",
+                "steam_already": "%s već se nalazi u vašoj Steam biblioteci.",
+                "steam_already_detail": "Ništa nije promijenjeno. Ako je želite ponovno dodati, najprije je uklonite iz Steama.",
+                "steam_failed_title": "Dodavanje u Steam nije uspjelo",
+                "steam_blocked": "Steamov popis igara izvan Steama nije moguće ažurirati.",
+                "steam_blocked_detail": "Potpuno zatvorite Steam i pokušajte ponovno. Ništa nije promijenjeno, a prethodni popis ostao je netaknut.",
+                "steam_unread": "Steamov popis igara izvan Steama nije moguće pročitati.",
+                "steam_unread_detail": "Potpuno zatvorite Steam i pokušajte ponovno.",
+                "uninstaller_detail": "Umjesto toga deinstalirajte igru u sustavu Windows: Postavke, Aplikacije.",
+                "bonus_detail": "Ovaj je disk izrađen bez mape s bonus sadržajem.",
+                "mods_detail": "U mapi s modovima na ovom disku nije pronađen alat za modove.",
+                "looked_for": "Traženo: %s",
+                "looked_in": "Traženo u:",
+                "and_more": "... i još %d",
+                "play_again": "Najprije još jednom pokušajte „Igraj”: tek instalirana mapa ponekad se još skenira. Ako i dalje ne uspijeva, kopiranje mape igre možda nije dovršeno.",
                 "yes": "Da", "no": "Ne", "cancel": "Otkaži"
             },
             "Czech": {
@@ -8562,6 +11935,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Otevře nástroj pro módy z tohoto disku.",
                 "tip_steam": "Přidá hru do vaší knihovny Steam, abyste ji mohli spustit odtud.",
                 "tip_uninstall": "Odstraní nainstalovanou hru. Vaše uložené pozice zůstanou zachovány.",
+                "choose_game": "Vyberte hru", "sort_disc": "Jako na disku", "sort_az": "Od A do Z",
+                "tip_star": "Označte hru hvězdičkou a bude nahoře v hlavní nabídce.",
+                "play_games": "Hrát", "steam": "Přidat do Steamu",
+                "ok": "OK",
+                "steam_none_title": "Není co přidat",
+                "steam_none": "Nebyla nalezena žádná hra, kterou by bylo možné přidat do vaší knihovny Steam.",
+                "steam_none_detail": "Nejprve nainstalujte hru z disku a pak to zkuste znovu.",
+                "steam_missing_title": "Steam nebyl nalezen",
+                "steam_missing": "V tomto počítači nebyl nalezen žádný profil Steam.",
+                "steam_missing_detail": "Nainstalujte Steam, jednou se přihlaste a pak to zkuste znovu. Steam vytvoří potřebnou složku až po prvním přihlášení.",
+                "steam_running_title": "Nejprve ukončete Steam",
+                "steam_running": "Steam je spuštěný, proto zatím nebylo nic přidáno.",
+                "steam_running_why": "Steam by změnu vrátil: seznam her mimo Steam drží v paměti a při zavření tuto kopii znovu zapíše.",
+                "steam_running_detail": "Steam úplně ukončete: klikněte pravým tlačítkem na ikonu Steamu v oznamovací oblasti vedle hodin a zvolte Ukončit. Zavřít okno nestačí. Potom znovu stiskněte „Přidat do Steamu“.",
+                "steam_added_title": "Přidáno do Steamu",
+                "steam_added": "%s je nyní ve vaší knihovně Steam mezi hrami mimo Steam.",
+                "steam_added_detail": "Objeví se tam při příštím spuštění Steamu.",
+                "steam_already_title": "Už je ve Steamu",
+                "steam_already": "%s už je ve vaší knihovně Steam.",
+                "steam_already_detail": "Nic nebylo změněno. Pokud ji chcete přidat znovu, nejprve ji ze Steamu odeberte.",
+                "steam_failed_title": "Přidání do Steamu se nezdařilo",
+                "steam_blocked": "Seznam her mimo Steam se ve Steamu nepodařilo aktualizovat.",
+                "steam_blocked_detail": "Steam úplně zavřete a zkuste to znovu. Nic nebylo změněno a předchozí seznam zůstal beze změny.",
+                "steam_unread": "Seznam her mimo Steam se ve Steamu nepodařilo přečíst.",
+                "steam_unread_detail": "Steam úplně zavřete a zkuste to znovu.",
+                "uninstaller_detail": "Hru místo toho odinstalujte v systému Windows v Nastavení, v části Aplikace.",
+                "bonus_detail": "Tento disk byl vytvořen bez složky s bonusovým obsahem.",
+                "mods_detail": "Ve složce s módy na tomto disku nebyl nalezen žádný nástroj pro módy.",
+                "looked_for": "Hledáno: %s",
+                "looked_in": "Hledáno v:",
+                "and_more": "... a dalších %d",
+                "play_again": "Nejprve zkuste ještě jednou „Hrát“: čerstvě nainstalovaná složka se někdy ještě prověřuje. Pokud to stále selhává, kopírování složky hry možná nebylo dokončeno.",
                 "yes": "Ano", "no": "Ne", "cancel": "Zrušit"
             },
             "Danish": {
@@ -8579,6 +11984,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Åbner modværktøjet på denne disk.",
                 "tip_steam": "Føjer spillet til dit Steam-bibliotek, så du kan starte det derfra.",
                 "tip_uninstall": "Fjerner det installerede spil. Dine gemte spil røres ikke.",
+                "choose_game": "Vælg dit spil", "sort_disc": "Som på disken", "sort_az": "A til Å",
+                "tip_star": "Giv et spil en stjerne, så kommer det øverst i hovedmenuen.",
+                "play_games": "Spil", "steam": "Føj til Steam",
+                "ok": "OK",
+                "steam_none_title": "Intet at tilføje",
+                "steam_none": "Der blev ikke fundet noget spil at føje til dit Steam-bibliotek.",
+                "steam_none_detail": "Installer spillet fra disken først, og prøv så igen.",
+                "steam_missing_title": "Steam blev ikke fundet",
+                "steam_missing": "Der blev ikke fundet nogen Steam-profil på denne pc.",
+                "steam_missing_detail": "Installer Steam, og log ind én gang, og prøv så igen. Steam opretter først den mappe, der skal bruges, efter det første login.",
+                "steam_running_title": "Afslut Steam først",
+                "steam_running": "Steam kører, så der er ikke tilføjet noget endnu.",
+                "steam_running_why": "Steam ville fortryde det: Steam holder sin liste over ikke-Steam-spil i hukommelsen og skriver den kopi tilbage, når programmet lukkes.",
+                "steam_running_detail": "Afslut Steam helt: Højreklik på Steam-ikonet i meddelelsesområdet ved uret, og vælg Afslut. Det er ikke nok at lukke vinduet. Tryk derefter på »Føj til Steam« igen.",
+                "steam_added_title": "Føjet til Steam",
+                "steam_added": "%s er nu i dit Steam-bibliotek under ikke-Steam-spil.",
+                "steam_added_detail": "Det ligger der, næste gang du starter Steam.",
+                "steam_already_title": "Allerede i Steam",
+                "steam_already": "%s er allerede i dit Steam-bibliotek.",
+                "steam_already_detail": "Intet blev ændret. Fjern det fra Steam først, hvis du vil tilføje det igen.",
+                "steam_failed_title": "Kunne ikke føje til Steam",
+                "steam_blocked": "Steams liste over ikke-Steam-spil kunne ikke opdateres.",
+                "steam_blocked_detail": "Luk Steam helt, og prøv igen. Intet blev ændret, og den tidligere liste er urørt.",
+                "steam_unread": "Steams liste over ikke-Steam-spil kunne ikke læses.",
+                "steam_unread_detail": "Luk Steam helt, og prøv igen.",
+                "uninstaller_detail": "Afinstaller i stedet spillet under Indstillinger, Apps i Windows.",
+                "bonus_detail": "Denne disk blev lavet uden en bonusmappe.",
+                "mods_detail": "Der blev ikke fundet noget mod-værktøj i mods-mappen på denne disk.",
+                "looked_for": "Ledte efter: %s",
+                "looked_in": "Ledte i:",
+                "and_more": "... og %d mere",
+                "play_again": "Prøv »Spil« én gang til først: En nyinstalleret mappe bliver nogle gange stadig scannet. Hvis det bliver ved med at mislykkes, er spilmappen måske ikke færdig med at blive kopieret.",
                 "yes": "Ja", "no": "Nej", "cancel": "Annuller"
             },
             "Dutch": {
@@ -8596,6 +12033,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Opent de modtool op deze schijf.",
                 "tip_steam": "Voegt het spel toe aan je Steam-bibliotheek zodat je het daar kunt starten.",
                 "tip_uninstall": "Verwijdert het geïnstalleerde spel. Je opgeslagen spellen blijven behouden.",
+                "choose_game": "Kies je spel", "sort_disc": "Zoals op de schijf", "sort_az": "A tot Z",
+                "tip_star": "Geef een spel een ster en het komt bovenaan in het hoofdmenu.",
+                "play_games": "Spelen", "steam": "Toevoegen aan Steam",
+                "ok": "OK",
+                "steam_none_title": "Niets om toe te voegen",
+                "steam_none": "Er is geen spel gevonden om aan je Steam-bibliotheek toe te voegen.",
+                "steam_none_detail": "Installeer eerst het spel vanaf de schijf en probeer het daarna opnieuw.",
+                "steam_missing_title": "Steam niet gevonden",
+                "steam_missing": "Er is geen Steam-profiel gevonden op deze pc.",
+                "steam_missing_detail": "Installeer Steam, meld je één keer aan en probeer het daarna opnieuw. Steam maakt de benodigde map pas aan na de eerste aanmelding.",
+                "steam_running_title": "Sluit Steam eerst af",
+                "steam_running": "Steam is actief, dus er is nog niets toegevoegd.",
+                "steam_running_why": "Steam zou het ongedaan maken: Steam houdt de lijst met niet-Steam-spellen in het geheugen en schrijft die kopie terug bij het afsluiten.",
+                "steam_running_detail": "Sluit Steam helemaal af: klik met de rechtermuisknop op het Steam-pictogram in het meldingsgebied bij de klok en kies Afsluiten. Het venster sluiten is niet genoeg. Druk daarna opnieuw op ‘Toevoegen aan Steam’.",
+                "steam_added_title": "Toegevoegd aan Steam",
+                "steam_added": "%s staat nu in je Steam-bibliotheek, bij de niet-Steam-spellen.",
+                "steam_added_detail": "Je ziet het daar de volgende keer dat je Steam start.",
+                "steam_already_title": "Staat al in Steam",
+                "steam_already": "%s staat al in je Steam-bibliotheek.",
+                "steam_already_detail": "Er is niets gewijzigd. Verwijder het eerst uit Steam als je het opnieuw wilt toevoegen.",
+                "steam_failed_title": "Toevoegen aan Steam mislukt",
+                "steam_blocked": "De lijst met niet-Steam-spellen van Steam kon niet worden bijgewerkt.",
+                "steam_blocked_detail": "Sluit Steam helemaal af en probeer het opnieuw. Er is niets gewijzigd en de vorige lijst is onaangeroerd.",
+                "steam_unread": "De lijst met niet-Steam-spellen van Steam kon niet worden gelezen.",
+                "steam_unread_detail": "Sluit Steam helemaal af en probeer het opnieuw.",
+                "uninstaller_detail": "Verwijder het spel in plaats daarvan via Instellingen, Apps in Windows.",
+                "bonus_detail": "Deze schijf is gemaakt zonder bonusmap.",
+                "mods_detail": "Er is geen modtool gevonden in de modsmap op deze schijf.",
+                "looked_for": "Gezocht naar: %s",
+                "looked_in": "Gezocht in:",
+                "and_more": "... en nog %d",
+                "play_again": "Probeer eerst nog een keer ‘Spelen’: een net geïnstalleerde map wordt soms nog gescand. Blijft het mislukken, dan is de spelmap misschien nog niet helemaal gekopieerd.",
                 "yes": "Ja", "no": "Nee", "cancel": "Annuleren"
             },
             "English": {
@@ -8613,6 +12082,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Opens the mod tool that came on this disc.",
                 "tip_steam": "Adds the game to your Steam library so you can start it from there.",
                 "tip_uninstall": "Removes the installed game. Your saved games are not touched.",
+                "choose_game": "Choose your game", "sort_disc": "As on the disc", "sort_az": "A to Z",
+                "tip_star": "Star a game to put it at the top of the main menu.",
+                "play_games": "Play Games", "steam": "Add to Steam",
+                "ok": "OK",
+                "steam_none_title": "Nothing to add",
+                "steam_none": "No game was found to put in your Steam library.",
+                "steam_none_detail": "Install the game from the disc first, then try again.",
+                "steam_missing_title": "Steam not found",
+                "steam_missing": "No Steam profile was found on this PC.",
+                "steam_missing_detail": "Install Steam and sign in once, then try again. Steam only creates the folder this needs after the first sign-in.",
+                "steam_running_title": "Exit Steam first",
+                "steam_running": "Steam is running, so nothing has been added yet.",
+                "steam_running_why": "Steam would undo it: it keeps its list of non-Steam games in memory and writes that copy back out when it closes.",
+                "steam_running_detail": "Exit Steam completely: right-click the Steam icon in the notification area, by the clock, and choose Exit. Closing the window is not enough. Then press Add to Steam again.",
+                "steam_added_title": "Added to Steam",
+                "steam_added": "%s is in your Steam library now, under non-Steam games.",
+                "steam_added_detail": "It will be there the next time you start Steam.",
+                "steam_already_title": "Already in Steam",
+                "steam_already": "%s is already in your Steam library.",
+                "steam_already_detail": "Nothing was changed. Remove it from Steam first if you want to add it again.",
+                "steam_failed_title": "Could not add to Steam",
+                "steam_blocked": "Steam's list of non-Steam games could not be updated.",
+                "steam_blocked_detail": "Close Steam completely and try again. Nothing was changed, and the previous list is untouched.",
+                "steam_unread": "Steam's list of non-Steam games could not be read.",
+                "steam_unread_detail": "Close Steam completely and try again.",
+                "uninstaller_detail": "Uninstall the game from Windows Settings, Apps instead.",
+                "bonus_detail": "This disc was built without a bonus folder.",
+                "mods_detail": "No mod tool was found in the mods folder on this disc.",
+                "looked_for": "Looked for: %s",
+                "looked_in": "Looked in:",
+                "and_more": "... and %d more",
+                "play_again": "Try Play once more first: a freshly installed folder is sometimes still being scanned. If it keeps failing, the game folder may not have finished copying.",
                 "yes": "Yes", "no": "No", "cancel": "Cancel"
             },
             "Finnish": {
@@ -8630,16 +12131,48 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Avaa tällä levyllä olevan modityökalun.",
                 "tip_steam": "Lisää pelin Steam-kirjastoosi, jotta voit käynnistää sen sieltä.",
                 "tip_uninstall": "Poistaa asennetun pelin. Tallennuksiisi ei kosketa.",
+                "choose_game": "Valitse peli", "sort_disc": "Kuten levyllä", "sort_az": "A-Ö",
+                "tip_star": "Merkitse peli tähdellä, niin se näkyy päävalikon ylimpänä.",
+                "play_games": "Pelaa", "steam": "Lisää Steamiin",
+                "ok": "OK",
+                "steam_none_title": "Ei lisättävää",
+                "steam_none": "Steam-kirjastoosi lisättävää peliä ei löytynyt.",
+                "steam_none_detail": "Asenna peli ensin levyltä ja yritä sitten uudelleen.",
+                "steam_missing_title": "Steamia ei löytynyt",
+                "steam_missing": "Tältä tietokoneelta ei löytynyt Steam-profiilia.",
+                "steam_missing_detail": "Asenna Steam ja kirjaudu sisään kerran, ja yritä sitten uudelleen. Steam luo tarvittavan kansion vasta ensimmäisen kirjautumisen jälkeen.",
+                "steam_running_title": "Sulje Steam ensin",
+                "steam_running": "Steam on käynnissä, joten mitään ei ole vielä lisätty.",
+                "steam_running_why": "Steam kumoaisi muutoksen: se pitää luetteloa muista kuin Steam-peleistä muistissa ja kirjoittaa sen kopion takaisin sulkeutuessaan.",
+                "steam_running_detail": "Sulje Steam kokonaan: napsauta hiiren kakkospainikkeella Steam-kuvaketta ilmaisinalueella kellon vieressä ja valitse Poistu. Ikkunan sulkeminen ei riitä. Paina sitten uudelleen ”Lisää Steamiin”.",
+                "steam_added_title": "Lisätty Steamiin",
+                "steam_added": "%s on nyt Steam-kirjastossasi muiden kuin Steam-pelien joukossa.",
+                "steam_added_detail": "Se näkyy siellä, kun käynnistät Steamin seuraavan kerran.",
+                "steam_already_title": "Jo Steamissa",
+                "steam_already": "%s on jo Steam-kirjastossasi.",
+                "steam_already_detail": "Mitään ei muutettu. Poista se ensin Steamista, jos haluat lisätä sen uudelleen.",
+                "steam_failed_title": "Steamiin lisääminen epäonnistui",
+                "steam_blocked": "Steamin luetteloa muista kuin Steam-peleistä ei voitu päivittää.",
+                "steam_blocked_detail": "Sulje Steam kokonaan ja yritä uudelleen. Mitään ei muutettu, ja aiempi luettelo on ennallaan.",
+                "steam_unread": "Steamin luetteloa muista kuin Steam-peleistä ei voitu lukea.",
+                "steam_unread_detail": "Sulje Steam kokonaan ja yritä uudelleen.",
+                "uninstaller_detail": "Poista pelin asennus sen sijaan Windowsin kohdasta Asetukset, Sovellukset.",
+                "bonus_detail": "Tämä levy on tehty ilman bonuskansiota.",
+                "mods_detail": "Tämän levyn mods-kansiosta ei löytynyt modityökalua.",
+                "looked_for": "Etsittiin: %s",
+                "looked_in": "Etsittiin kohteesta:",
+                "and_more": "... ja %d muuta",
+                "play_again": "Kokeile ensin vielä kerran ”Pelaa”: juuri asennettua kansiota tarkistetaan joskus vielä. Jos se ei vieläkään onnistu, pelikansion kopiointi on ehkä kesken.",
                 "yes": "Kyllä", "no": "Ei", "cancel": "Peruuta"
             },
             "French": {
                 "play": "Jouer", "bonus": "Contenu Bonus", "mods": "Mods", "compat": "Mode de compatibilité", "uninstall": "Désinstaller", "exit": "Quitter",
-                "language": "Langue:", "error": "Erreur", "warning": "Avertissement",
-                "game_not_found": "Exécutable du jeu introuvable!",
-                "bonus_not_found": "Contenu bonus introuvable!",
-                "mods_not_found": "Outil de mods introuvable !",
-                "uninstaller_not_found": "Désinstallateur introuvable!",
-                "confirm_uninstall": "Êtes-vous sûr de vouloir désinstaller ce jeu?",
+                "language": "Langue :", "error": "Erreur", "warning": "Avertissement",
+                "game_not_found": "Exécutable du jeu introuvable !",
+                "bonus_not_found": "Contenu bonus introuvable !",
+                "mods_not_found": "Outil de mods introuvable !",
+                "uninstaller_not_found": "Désinstallateur introuvable !",
+                "confirm_uninstall": "Êtes-vous sûr de vouloir désinstaller ce jeu ?",
                 "install": "Installer le jeu",
                 "tip_install": "Lance l'installateur présent sur ce disque.",
                 "tip_compat": "Lance le jeu avec des réglages pour les cartes graphiques anciennes ou non prises en charge.",
@@ -8647,6 +12180,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Ouvre l'outil de mods présent sur ce disque.",
                 "tip_steam": "Ajoute le jeu à votre bibliothèque Steam pour le lancer depuis celle-ci.",
                 "tip_uninstall": "Supprime le jeu installé. Vos sauvegardes ne sont pas touchées.",
+                "choose_game": "Choisissez votre jeu", "sort_disc": "Comme sur le disque", "sort_az": "De A à Z",
+                "tip_star": "Ajoutez une étoile à un jeu pour le placer en haut du menu principal.",
+                "play_games": "Jouer", "steam": "Ajouter à Steam",
+                "ok": "OK",
+                "steam_none_title": "Rien à ajouter",
+                "steam_none": "Aucun jeu n'a été trouvé à ajouter à votre bibliothèque Steam.",
+                "steam_none_detail": "Installez d'abord le jeu depuis le disque, puis réessayez.",
+                "steam_missing_title": "Steam introuvable",
+                "steam_missing": "Aucun profil Steam n'a été trouvé sur ce PC.",
+                "steam_missing_detail": "Installez Steam et connectez-vous une fois, puis réessayez. Steam ne crée le dossier nécessaire qu'après la première connexion.",
+                "steam_running_title": "Quittez d'abord Steam",
+                "steam_running": "Steam est en cours d'exécution, rien n'a donc encore été ajouté.",
+                "steam_running_why": "Steam annulerait l'ajout : il garde sa liste de jeux non-Steam en mémoire et réécrit cette copie à sa fermeture.",
+                "steam_running_detail": "Quittez complètement Steam : faites un clic droit sur l'icône Steam dans la zone de notification, près de l'horloge, puis choisissez Quitter. Fermer la fenêtre ne suffit pas. Appuyez ensuite de nouveau sur « Ajouter à Steam ».",
+                "steam_added_title": "Ajouté à Steam",
+                "steam_added": "%s est maintenant dans votre bibliothèque Steam, parmi les jeux non-Steam.",
+                "steam_added_detail": "Il y apparaîtra au prochain démarrage de Steam.",
+                "steam_already_title": "Déjà dans Steam",
+                "steam_already": "%s est déjà dans votre bibliothèque Steam.",
+                "steam_already_detail": "Rien n'a été modifié. Retirez-le d'abord de Steam si vous voulez l'ajouter à nouveau.",
+                "steam_failed_title": "Impossible d'ajouter à Steam",
+                "steam_blocked": "La liste des jeux non-Steam de Steam n'a pas pu être mise à jour.",
+                "steam_blocked_detail": "Fermez complètement Steam et réessayez. Rien n'a été modifié et la liste précédente est intacte.",
+                "steam_unread": "La liste des jeux non-Steam de Steam n'a pas pu être lue.",
+                "steam_unread_detail": "Fermez complètement Steam et réessayez.",
+                "uninstaller_detail": "Désinstallez plutôt le jeu depuis Paramètres, Applications dans Windows.",
+                "bonus_detail": "Ce disque a été créé sans dossier de bonus.",
+                "mods_detail": "Aucun outil de mods n'a été trouvé dans le dossier mods de ce disque.",
+                "looked_for": "Recherché : %s",
+                "looked_in": "Emplacement recherché :",
+                "and_more": "... et %d de plus",
+                "play_again": "Essayez d'abord « Jouer » une nouvelle fois : un dossier tout juste installé est parfois encore en cours d'analyse. Si l'échec persiste, la copie du dossier du jeu n'est peut-être pas terminée.",
                 "yes": "Oui", "no": "Non", "cancel": "Annuler"
             },
             "German": {
@@ -8656,7 +12221,7 @@ class GameMenu(QtWidgets.QWidget):
                 "bonus_not_found": "Bonusinhalte nicht gefunden!",
                 "mods_not_found": "Mod-Tool nicht gefunden!",
                 "uninstaller_not_found": "Deinstallationsprogramm nicht gefunden!",
-                "confirm_uninstall": "Sind Sie sicher, dass Sie dieses Spiel deinstallieren möchten?",
+                "confirm_uninstall": "Bist du sicher, dass du dieses Spiel deinstallieren möchtest?",
                 "install": "Spiel installieren",
                 "tip_install": "Startet das Installationsprogramm auf dieser Disc.",
                 "tip_compat": "Startet das Spiel mit Einstellungen für ältere oder nicht unterstützte Grafikhardware.",
@@ -8664,6 +12229,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Öffnet das Mod-Werkzeug auf dieser Disc.",
                 "tip_steam": "Fügt das Spiel deiner Steam-Bibliothek hinzu, damit du es von dort starten kannst.",
                 "tip_uninstall": "Entfernt das installierte Spiel. Deine Spielstände bleiben erhalten.",
+                "choose_game": "Wähle dein Spiel", "sort_disc": "Wie auf der Disc", "sort_az": "A bis Z",
+                "tip_star": "Markiere ein Spiel mit einem Stern, dann steht es oben im Hauptmenü.",
+                "play_games": "Spielen", "steam": "Zu Steam hinzufügen",
+                "ok": "OK",
+                "steam_none_title": "Nichts hinzuzufügen",
+                "steam_none": "Es wurde kein Spiel gefunden, das deiner Steam-Bibliothek hinzugefügt werden kann.",
+                "steam_none_detail": "Installiere zuerst das Spiel von der Disc und versuche es dann erneut.",
+                "steam_missing_title": "Steam nicht gefunden",
+                "steam_missing": "Auf diesem PC wurde kein Steam-Profil gefunden.",
+                "steam_missing_detail": "Installiere Steam, melde dich einmal an und versuche es dann erneut. Steam legt den benötigten Ordner erst nach der ersten Anmeldung an.",
+                "steam_running_title": "Beende zuerst Steam",
+                "steam_running": "Steam läuft, deshalb wurde noch nichts hinzugefügt.",
+                "steam_running_why": "Steam würde die Änderung rückgängig machen: Steam hält seine Liste der Nicht-Steam-Spiele im Arbeitsspeicher und schreibt diese Kopie beim Beenden zurück.",
+                "steam_running_detail": "Beende Steam vollständig: Klicke mit der rechten Maustaste auf das Steam-Symbol im Infobereich neben der Uhr und wähle Beenden. Das Fenster zu schließen reicht nicht. Drücke danach erneut auf „Zu Steam hinzufügen“.",
+                "steam_added_title": "Zu Steam hinzugefügt",
+                "steam_added": "%s ist jetzt in deiner Steam-Bibliothek, unter den Nicht-Steam-Spielen.",
+                "steam_added_detail": "Beim nächsten Start von Steam ist es dort zu finden.",
+                "steam_already_title": "Bereits in Steam",
+                "steam_already": "%s ist bereits in deiner Steam-Bibliothek.",
+                "steam_already_detail": "Es wurde nichts geändert. Entferne es zuerst aus Steam, wenn du es erneut hinzufügen möchtest.",
+                "steam_failed_title": "Hinzufügen zu Steam fehlgeschlagen",
+                "steam_blocked": "Die Liste der Nicht-Steam-Spiele in Steam konnte nicht aktualisiert werden.",
+                "steam_blocked_detail": "Schließe Steam vollständig und versuche es erneut. Es wurde nichts geändert, die bisherige Liste ist unverändert.",
+                "steam_unread": "Die Liste der Nicht-Steam-Spiele in Steam konnte nicht gelesen werden.",
+                "steam_unread_detail": "Schließe Steam vollständig und versuche es erneut.",
+                "uninstaller_detail": "Deinstalliere das Spiel stattdessen in Windows unter Einstellungen, Apps.",
+                "bonus_detail": "Diese Disc wurde ohne Bonusordner erstellt.",
+                "mods_detail": "Im Mods-Ordner dieser Disc wurde kein Mod-Werkzeug gefunden.",
+                "looked_for": "Gesucht nach: %s",
+                "looked_in": "Gesucht in:",
+                "and_more": "... und %d weitere",
+                "play_again": "Versuche es zuerst noch einmal mit „Spielen“: Ein frisch installierter Ordner wird manchmal noch geprüft. Wenn es weiterhin fehlschlägt, wurde der Spielordner vielleicht nicht vollständig kopiert.",
                 "yes": "Ja", "no": "Nein", "cancel": "Abbrechen"
             },
             "Greek": {
@@ -8681,6 +12278,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Ανοίγει το εργαλείο mods αυτού του δίσκου.",
                 "tip_steam": "Προσθέτει το παιχνίδι στη βιβλιοθήκη Steam σας για να το ξεκινάτε από εκεί.",
                 "tip_uninstall": "Αφαιρεί το εγκατεστημένο παιχνίδι. Τα αποθηκευμένα σας παραμένουν.",
+                "choose_game": "Επιλέξτε παιχνίδι", "sort_disc": "Όπως στον δίσκο", "sort_az": "Α έως Ω",
+                "tip_star": "Βάλτε αστέρι σε ένα παιχνίδι για να εμφανιστεί στην κορυφή του κύριου μενού.",
+                "play_games": "Παίξε", "steam": "Προσθήκη στο Steam",
+                "ok": "OK",
+                "steam_none_title": "Τίποτα για προσθήκη",
+                "steam_none": "Δεν βρέθηκε παιχνίδι για προσθήκη στη βιβλιοθήκη Steam σας.",
+                "steam_none_detail": "Εγκαταστήστε πρώτα το παιχνίδι από τον δίσκο και δοκιμάστε ξανά.",
+                "steam_missing_title": "Το Steam δεν βρέθηκε",
+                "steam_missing": "Δεν βρέθηκε προφίλ Steam σε αυτόν τον υπολογιστή.",
+                "steam_missing_detail": "Εγκαταστήστε το Steam και συνδεθείτε μία φορά, και μετά δοκιμάστε ξανά. Το Steam δημιουργεί τον φάκελο που χρειάζεται μόνο μετά την πρώτη σύνδεση.",
+                "steam_running_title": "Τερματίστε πρώτα το Steam",
+                "steam_running": "Το Steam εκτελείται, οπότε δεν έχει προστεθεί τίποτα ακόμα.",
+                "steam_running_why": "Το Steam θα αναιρούσε την αλλαγή: κρατά τη λίστα με τα παιχνίδια εκτός Steam στη μνήμη και γράφει ξανά αυτό το αντίγραφο όταν κλείνει.",
+                "steam_running_detail": "Τερματίστε πλήρως το Steam: κάντε δεξί κλικ στο εικονίδιο του Steam στην περιοχή ειδοποιήσεων, δίπλα στο ρολόι, και επιλέξτε Έξοδος. Το κλείσιμο του παραθύρου δεν αρκεί. Μετά πατήστε ξανά «Προσθήκη στο Steam».",
+                "steam_added_title": "Προστέθηκε στο Steam",
+                "steam_added": "%s βρίσκεται πλέον στη βιβλιοθήκη Steam σας, στα παιχνίδια εκτός Steam.",
+                "steam_added_detail": "Θα εμφανίζεται εκεί την επόμενη φορά που θα ανοίξετε το Steam.",
+                "steam_already_title": "Ήδη στο Steam",
+                "steam_already": "%s βρίσκεται ήδη στη βιβλιοθήκη Steam σας.",
+                "steam_already_detail": "Δεν άλλαξε τίποτα. Αφαιρέστε το πρώτα από το Steam αν θέλετε να το προσθέσετε ξανά.",
+                "steam_failed_title": "Δεν ήταν δυνατή η προσθήκη στο Steam",
+                "steam_blocked": "Δεν ήταν δυνατή η ενημέρωση της λίστας του Steam με τα παιχνίδια εκτός Steam.",
+                "steam_blocked_detail": "Κλείστε εντελώς το Steam και δοκιμάστε ξανά. Δεν άλλαξε τίποτα και η προηγούμενη λίστα έμεινε ανέπαφη.",
+                "steam_unread": "Δεν ήταν δυνατή η ανάγνωση της λίστας του Steam με τα παιχνίδια εκτός Steam.",
+                "steam_unread_detail": "Κλείστε εντελώς το Steam και δοκιμάστε ξανά.",
+                "uninstaller_detail": "Απεγκαταστήστε το παιχνίδι από τις Ρυθμίσεις των Windows, στις Εφαρμογές.",
+                "bonus_detail": "Αυτός ο δίσκος δημιουργήθηκε χωρίς φάκελο bonus.",
+                "mods_detail": "Δεν βρέθηκε εργαλείο mods στον φάκελο mods αυτού του δίσκου.",
+                "looked_for": "Αναζητήθηκε: %s",
+                "looked_in": "Αναζήτηση σε:",
+                "and_more": "... και %d ακόμη",
+                "play_again": "Δοκιμάστε πρώτα ξανά το «Παίξε»: ένας φάκελος που μόλις εγκαταστάθηκε μερικές φορές ελέγχεται ακόμα. Αν συνεχίσει να αποτυγχάνει, ίσως δεν έχει ολοκληρωθεί η αντιγραφή του φακέλου του παιχνιδιού.",
                 "yes": "Ναι", "no": "Όχι", "cancel": "Ακύρωση"
             },
             "Hebrew": {
@@ -8698,6 +12327,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "פותח את כלי המודים שבתקליטור הזה.",
                 "tip_steam": "מוסיף את המשחק לספריית Steam שלך כדי להפעיל אותו משם.",
                 "tip_uninstall": "מסיר את המשחק המותקן. קבצי השמירה שלך לא נפגעים.",
+                "choose_game": "בחר את המשחק שלך", "sort_disc": "כמו בדיסק", "sort_az": "לפי שם",
+                "tip_star": "סמן משחק בכוכב כדי שיופיע בראש התפריט הראשי.",
+                "play_games": "שחק", "steam": "הוסף ל-Steam",
+                "ok": "אישור",
+                "steam_none_title": "אין מה להוסיף",
+                "steam_none": "לא נמצא משחק להוספה לספריית Steam שלך.",
+                "steam_none_detail": "התקן קודם את המשחק מהתקליטור, ואז נסה שוב.",
+                "steam_missing_title": "Steam לא נמצא",
+                "steam_missing": "לא נמצא פרופיל Steam במחשב הזה.",
+                "steam_missing_detail": "התקן את Steam והתחבר פעם אחת, ואז נסה שוב. Steam יוצר את התיקייה הדרושה רק אחרי ההתחברות הראשונה.",
+                "steam_running_title": "צא קודם מ-Steam",
+                "steam_running": "Steam פועל, ולכן עדיין לא נוסף דבר.",
+                "steam_running_why": "Steam היה מבטל את ההוספה: הוא שומר בזיכרון את רשימת המשחקים שאינם מ-Steam וכותב את העותק הזה בחזרה כשהוא נסגר.",
+                "steam_running_detail": "צא מ-Steam לגמרי: לחץ לחיצה ימנית על סמל Steam באזור ההודעות, ליד השעון, ובחר Exit. סגירת החלון אינה מספיקה. לאחר מכן לחץ שוב על הוסף ל-Steam.",
+                "steam_added_title": "נוסף ל-Steam",
+                "steam_added": "%s בספריית Steam שלך עכשיו, תחת משחקים שאינם מ-Steam.",
+                "steam_added_detail": "זה יופיע שם בפעם הבאה שתפעיל את Steam.",
+                "steam_already_title": "כבר נמצא ב-Steam",
+                "steam_already": "%s כבר בספריית Steam שלך.",
+                "steam_already_detail": "לא שונה דבר. הסר אותו קודם מ-Steam אם ברצונך להוסיף אותו שוב.",
+                "steam_failed_title": "לא ניתן להוסיף ל-Steam",
+                "steam_blocked": "לא ניתן היה לעדכן את רשימת המשחקים שאינם מ-Steam ב-Steam.",
+                "steam_blocked_detail": "סגור את Steam לגמרי ונסה שוב. לא שונה דבר, והרשימה הקודמת לא נפגעה.",
+                "steam_unread": "לא ניתן היה לקרוא את רשימת המשחקים שאינם מ-Steam ב-Steam.",
+                "steam_unread_detail": "סגור את Steam לגמרי ונסה שוב.",
+                "uninstaller_detail": "במקום זאת, הסר את המשחק דרך הגדרות, אפליקציות ב-Windows.",
+                "bonus_detail": "התקליטור הזה נבנה ללא תיקיית בונוס.",
+                "mods_detail": "לא נמצא כלי מודים בתיקיית המודים שבתקליטור הזה.",
+                "looked_for": "חיפוש אחר: %s",
+                "looked_in": "חיפוש ב:",
+                "and_more": "... ועוד %d",
+                "play_again": "נסה קודם ללחוץ על שחק פעם נוספת: תיקייה שהותקנה זה עתה נסרקת לפעמים עדיין. אם זה ממשיך להיכשל, ייתכן שהעתקת תיקיית המשחק לא הסתיימה.",
                 "yes": "כן", "no": "לא", "cancel": "בטל"
             },
             "Hindi": {
@@ -8715,6 +12376,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "इस डिस्क पर मौजूद मॉड टूल खोलता है।",
                 "tip_steam": "गेम को आपकी Steam लाइब्रेरी में जोड़ता है ताकि आप उसे वहाँ से शुरू कर सकें।",
                 "tip_uninstall": "इंस्टॉल किए गए गेम को हटाता है। आपकी सेव फ़ाइलों को छुआ नहीं जाता।",
+                "choose_game": "अपना गेम चुनें", "sort_disc": "डिस्क के क्रम में", "sort_az": "नाम के क्रम में",
+                "tip_star": "किसी गेम पर स्टार लगाएँ ताकि वह मुख्य मेनू में सबसे ऊपर दिखे।",
+                "play_games": "गेम खेलें", "steam": "Steam में जोड़ें",
+                "ok": "ठीक है",
+                "steam_none_title": "जोड़ने के लिए कुछ नहीं",
+                "steam_none": "आपकी Steam लाइब्रेरी में जोड़ने के लिए कोई गेम नहीं मिला।",
+                "steam_none_detail": "पहले डिस्क से गेम इंस्टॉल करें, फिर दोबारा कोशिश करें।",
+                "steam_missing_title": "Steam नहीं मिला",
+                "steam_missing": "इस PC पर कोई Steam प्रोफ़ाइल नहीं मिली।",
+                "steam_missing_detail": "Steam इंस्टॉल करें और एक बार साइन इन करें, फिर दोबारा कोशिश करें। Steam इसके लिए ज़रूरी फ़ोल्डर पहली बार साइन इन करने के बाद ही बनाता है।",
+                "steam_running_title": "पहले Steam से बाहर निकलें",
+                "steam_running": "Steam चल रहा है, इसलिए अभी तक कुछ नहीं जोड़ा गया है।",
+                "steam_running_why": "Steam इसे पलट देगा: वह गैर-Steam गेम्स की अपनी सूची मेमोरी में रखता है और बंद होते समय वही कॉपी वापस लिख देता है।",
+                "steam_running_detail": "Steam से पूरी तरह बाहर निकलें: घड़ी के पास सूचना क्षेत्र में Steam आइकन पर राइट-क्लिक करें और Exit चुनें। सिर्फ़ विंडो बंद करना काफ़ी नहीं है। फिर ‘Steam में जोड़ें’ दोबारा दबाएँ।",
+                "steam_added_title": "Steam में जोड़ा गया",
+                "steam_added": "%s अब आपकी Steam लाइब्रेरी में, गैर-Steam गेम्स के अंतर्गत है।",
+                "steam_added_detail": "अगली बार Steam शुरू करने पर यह वहाँ दिखेगा।",
+                "steam_already_title": "पहले से Steam में है",
+                "steam_already": "%s पहले से आपकी Steam लाइब्रेरी में है।",
+                "steam_already_detail": "कुछ भी नहीं बदला गया। अगर आप इसे फिर से जोड़ना चाहते हैं, तो पहले इसे Steam से हटाएँ।",
+                "steam_failed_title": "Steam में नहीं जोड़ा जा सका",
+                "steam_blocked": "Steam की गैर-Steam गेम्स की सूची अपडेट नहीं की जा सकी।",
+                "steam_blocked_detail": "Steam को पूरी तरह बंद करें और दोबारा कोशिश करें। कुछ भी नहीं बदला गया, और पिछली सूची जस की तस है।",
+                "steam_unread": "Steam की गैर-Steam गेम्स की सूची पढ़ी नहीं जा सकी।",
+                "steam_unread_detail": "Steam को पूरी तरह बंद करें और दोबारा कोशिश करें।",
+                "uninstaller_detail": "इसके बजाय Windows की सेटिंग्स में ऐप्स से गेम अनइंस्टॉल करें।",
+                "bonus_detail": "यह डिस्क बोनस फ़ोल्डर के बिना बनाई गई थी।",
+                "mods_detail": "इस डिस्क के mods फ़ोल्डर में कोई मॉड टूल नहीं मिला।",
+                "looked_for": "खोजा गया: %s",
+                "looked_in": "यहाँ खोजा गया:",
+                "and_more": "... और %d",
+                "play_again": "पहले एक बार और ‘खेल खेलें’ आज़माएँ: नया इंस्टॉल हुआ फ़ोल्डर कभी-कभी अभी भी स्कैन हो रहा होता है। अगर यह बार-बार विफल हो, तो हो सकता है कि गेम फ़ोल्डर की कॉपी पूरी न हुई हो।",
                 "yes": "हाँ", "no": "नहीं", "cancel": "रद्द करें"
             },
             "Hungarian": {
@@ -8724,7 +12417,7 @@ class GameMenu(QtWidgets.QWidget):
                 "bonus_not_found": "A bónusz tartalom nem található!",
                 "mods_not_found": "A mod eszköz nem található!",
                 "uninstaller_not_found": "Az eltávolító nem található!",
-                "confirm_uninstall": "Biztos benne, hogy el szeretné távolítani ezt a játékot?",
+                "confirm_uninstall": "Biztosan el szeretnéd távolítani ezt a játékot?",
                 "install": "Játék telepítése",
                 "tip_install": "Elindítja a lemezen található telepítőt.",
                 "tip_compat": "Elindítja a játékot régebbi vagy nem támogatott videokártyához való beállításokkal.",
@@ -8732,6 +12425,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Megnyitja a lemezen található mod eszközt.",
                 "tip_steam": "Hozzáadja a játékot a Steam könyvtáradhoz, hogy onnan indíthasd.",
                 "tip_uninstall": "Eltávolítja a telepített játékot. A mentéseid érintetlenek maradnak.",
+                "choose_game": "Válaszd ki a játékot", "sort_disc": "Ahogy a lemezen", "sort_az": "A-tól Z-ig",
+                "tip_star": "Jelölj meg egy játékot csillaggal, és a főmenü tetejére kerül.",
+                "play_games": "Játék", "steam": "Hozzáadás a Steamhez",
+                "ok": "OK",
+                "steam_none_title": "Nincs mit hozzáadni",
+                "steam_none": "Nem található játék, amelyet hozzá lehetne adni a Steam könyvtáradhoz.",
+                "steam_none_detail": "Előbb telepítsd a játékot a lemezről, aztán próbáld újra.",
+                "steam_missing_title": "A Steam nem található",
+                "steam_missing": "Ezen a gépen nem található Steam-profil.",
+                "steam_missing_detail": "Telepítsd a Steamet, és jelentkezz be egyszer, aztán próbáld újra. A Steam csak az első bejelentkezés után hozza létre a szükséges mappát.",
+                "steam_running_title": "Előbb lépj ki a Steamből",
+                "steam_running": "A Steam fut, ezért még semmi sem lett hozzáadva.",
+                "steam_running_why": "A Steam visszacsinálná: a nem Steames játékok listáját a memóriában tartja, és bezáráskor ezt a példányt írja vissza.",
+                "steam_running_detail": "Lépj ki teljesen a Steamből: kattints jobb gombbal a Steam ikonjára az értesítési területen, az óra mellett, és válaszd a Kilépés lehetőséget. Az ablak bezárása nem elég. Ezután nyomd meg újra a Hozzáadás a Steamhez gombot.",
+                "steam_added_title": "Hozzáadva a Steamhez",
+                "steam_added": "%s mostantól a Steam könyvtáradban van, a nem Steames játékok között.",
+                "steam_added_detail": "A Steam következő indításakor ott lesz.",
+                "steam_already_title": "Már a Steamben van",
+                "steam_already": "%s már a Steam könyvtáradban van.",
+                "steam_already_detail": "Semmi sem változott. Ha újra hozzá szeretnéd adni, előbb távolítsd el a Steamből.",
+                "steam_failed_title": "Nem sikerült hozzáadni a Steamhez",
+                "steam_blocked": "A Steam nem Steames játékokat tartalmazó listáját nem sikerült frissíteni.",
+                "steam_blocked_detail": "Zárd be teljesen a Steamet, és próbáld újra. Semmi sem változott, az előző lista érintetlen.",
+                "steam_unread": "A Steam nem Steames játékokat tartalmazó listáját nem sikerült beolvasni.",
+                "steam_unread_detail": "Zárd be teljesen a Steamet, és próbáld újra.",
+                "uninstaller_detail": "Ehelyett a Windows Gépház, Alkalmazások részében távolítsd el a játékot.",
+                "bonus_detail": "Ez a lemez bónuszmappa nélkül készült.",
+                "mods_detail": "A lemez mods mappájában nem található mod eszköz.",
+                "looked_for": "Keresés: %s",
+                "looked_in": "Keresés helye:",
+                "and_more": "... és még %d",
+                "play_again": "Előbb próbáld meg még egyszer a Játék gombot: egy frissen telepített mappát néha még ellenőriz a rendszer. Ha továbbra sem sikerül, lehet, hogy a játék mappájának másolása nem fejeződött be.",
                 "yes": "Igen", "no": "Nem", "cancel": "Mégse"
             },
             "Indonesian": {
@@ -8749,6 +12474,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Membuka alat mod pada disk ini.",
                 "tip_steam": "Menambahkan game ke pustaka Steam Anda agar bisa dijalankan dari sana.",
                 "tip_uninstall": "Menghapus game yang terpasang. File simpanan Anda tidak disentuh.",
+                "choose_game": "Pilih game Anda", "sort_disc": "Sesuai urutan disk", "sort_az": "A sampai Z",
+                "tip_star": "Beri bintang pada game agar muncul paling atas di menu utama.",
+                "play_games": "Main Game", "steam": "Tambahkan ke Steam",
+                "ok": "OK",
+                "steam_none_title": "Tidak ada yang ditambahkan",
+                "steam_none": "Tidak ditemukan game untuk dimasukkan ke pustaka Steam Anda.",
+                "steam_none_detail": "Pasang game dari disk terlebih dahulu, lalu coba lagi.",
+                "steam_missing_title": "Steam tidak ditemukan",
+                "steam_missing": "Tidak ditemukan profil Steam di PC ini.",
+                "steam_missing_detail": "Pasang Steam dan masuk sekali, lalu coba lagi. Steam baru membuat folder yang dibutuhkan setelah masuk pertama kali.",
+                "steam_running_title": "Keluar dari Steam dulu",
+                "steam_running": "Steam sedang berjalan, jadi belum ada yang ditambahkan.",
+                "steam_running_why": "Steam akan membatalkannya: Steam menyimpan daftar game non-Steam di memori dan menulis ulang salinan itu saat ditutup.",
+                "steam_running_detail": "Keluar dari Steam sepenuhnya: klik kanan ikon Steam di area pemberitahuan, di dekat jam, lalu pilih Keluar. Menutup jendela saja tidak cukup. Lalu tekan Tambahkan ke Steam lagi.",
+                "steam_added_title": "Ditambahkan ke Steam",
+                "steam_added": "%s sekarang ada di pustaka Steam Anda, di bagian game non-Steam.",
+                "steam_added_detail": "Game akan muncul di sana saat Anda menjalankan Steam berikutnya.",
+                "steam_already_title": "Sudah ada di Steam",
+                "steam_already": "%s sudah ada di pustaka Steam Anda.",
+                "steam_already_detail": "Tidak ada yang diubah. Hapus dulu dari Steam jika Anda ingin menambahkannya lagi.",
+                "steam_failed_title": "Tidak dapat menambahkan ke Steam",
+                "steam_blocked": "Daftar game non-Steam milik Steam tidak dapat diperbarui.",
+                "steam_blocked_detail": "Tutup Steam sepenuhnya, lalu coba lagi. Tidak ada yang diubah, dan daftar sebelumnya tetap utuh.",
+                "steam_unread": "Daftar game non-Steam milik Steam tidak dapat dibaca.",
+                "steam_unread_detail": "Tutup Steam sepenuhnya, lalu coba lagi.",
+                "uninstaller_detail": "Sebagai gantinya, hapus instalan game dari Pengaturan, Aplikasi di Windows.",
+                "bonus_detail": "Disk ini dibuat tanpa folder bonus.",
+                "mods_detail": "Tidak ditemukan alat mod di folder mods pada disk ini.",
+                "looked_for": "Mencari: %s",
+                "looked_in": "Mencari di:",
+                "and_more": "... dan %d lainnya",
+                "play_again": "Coba Main Game sekali lagi dulu: folder yang baru dipasang terkadang masih dipindai. Jika terus gagal, mungkin folder game belum selesai disalin.",
                 "yes": "Ya", "no": "Tidak", "cancel": "Batal"
             },
             "Italian": {
@@ -8766,6 +12523,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Apre lo strumento per le mod presente su questo disco.",
                 "tip_steam": "Aggiunge il gioco alla tua libreria Steam per avviarlo da lì.",
                 "tip_uninstall": "Rimuove il gioco installato. I tuoi salvataggi non vengono toccati.",
+                "choose_game": "Scegli il tuo gioco", "sort_disc": "Come sul disco", "sort_az": "Dalla A alla Z",
+                "tip_star": "Aggiungi una stella a un gioco per metterlo in cima al menu principale.",
+                "play_games": "Gioca", "steam": "Aggiungi a Steam",
+                "ok": "OK",
+                "steam_none_title": "Niente da aggiungere",
+                "steam_none": "Non è stato trovato nessun gioco da aggiungere alla tua libreria Steam.",
+                "steam_none_detail": "Installa prima il gioco dal disco, poi riprova.",
+                "steam_missing_title": "Steam non trovato",
+                "steam_missing": "Su questo PC non è stato trovato nessun profilo Steam.",
+                "steam_missing_detail": "Installa Steam ed effettua l'accesso una volta, poi riprova. Steam crea la cartella necessaria solo dopo il primo accesso.",
+                "steam_running_title": "Prima esci da Steam",
+                "steam_running": "Steam è in esecuzione, quindi non è stato ancora aggiunto nulla.",
+                "steam_running_why": "Steam annullerebbe la modifica: tiene in memoria il suo elenco di giochi non Steam e lo riscrive alla chiusura.",
+                "steam_running_detail": "Esci completamente da Steam: fai clic con il pulsante destro sull'icona di Steam nell'area di notifica, vicino all'orologio, e scegli Esci. Chiudere la finestra non basta. Poi premi di nuovo «Aggiungi a Steam».",
+                "steam_added_title": "Aggiunto a Steam",
+                "steam_added": "%s è ora nella tua libreria Steam, tra i giochi non Steam.",
+                "steam_added_detail": "Lo troverai lì al prossimo avvio di Steam.",
+                "steam_already_title": "Già in Steam",
+                "steam_already": "%s è già nella tua libreria Steam.",
+                "steam_already_detail": "Non è stato modificato nulla. Se vuoi aggiungerlo di nuovo, rimuovilo prima da Steam.",
+                "steam_failed_title": "Impossibile aggiungere a Steam",
+                "steam_blocked": "Non è stato possibile aggiornare l'elenco dei giochi non Steam di Steam.",
+                "steam_blocked_detail": "Chiudi completamente Steam e riprova. Non è stato modificato nulla e l'elenco precedente è intatto.",
+                "steam_unread": "Non è stato possibile leggere l'elenco dei giochi non Steam di Steam.",
+                "steam_unread_detail": "Chiudi completamente Steam e riprova.",
+                "uninstaller_detail": "Disinstalla invece il gioco da Impostazioni, App di Windows.",
+                "bonus_detail": "Questo disco è stato creato senza una cartella bonus.",
+                "mods_detail": "Nella cartella mods di questo disco non è stato trovato nessuno strumento per le mod.",
+                "looked_for": "Cercato: %s",
+                "looked_in": "Cercato in:",
+                "and_more": "... e altre %d",
+                "play_again": "Prova prima ancora una volta «Gioca»: una cartella appena installata a volte è ancora in fase di scansione. Se continua a non funzionare, la copia della cartella del gioco potrebbe non essere stata completata.",
                 "yes": "Sì", "no": "No", "cancel": "Annulla"
             },
             "Japanese": {
@@ -8783,6 +12572,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "このディスクに収録されたMODツールを開きます。",
                 "tip_steam": "ゲームをSteamライブラリに追加し、そこから起動できるようにします。",
                 "tip_uninstall": "インストールされたゲームを削除します。セーブデータはそのまま残ります。",
+                "choose_game": "ゲームを選択", "sort_disc": "ディスクの順", "sort_az": "名前順",
+                "tip_star": "星を付けたゲームはメインメニューの一番上に表示されます。",
+                "play_games": "ゲームを開始", "steam": "Steamに追加",
+                "ok": "OK",
+                "steam_none_title": "追加するものがありません",
+                "steam_none": "Steamライブラリに追加できるゲームが見つかりませんでした。",
+                "steam_none_detail": "先にディスクからゲームをインストールしてから、もう一度お試しください。",
+                "steam_missing_title": "Steamが見つかりません",
+                "steam_missing": "このPCにSteamのプロフィールが見つかりませんでした。",
+                "steam_missing_detail": "Steamをインストールして一度サインインしてから、もう一度お試しください。必要なフォルダーは、最初のサインイン後にSteamが作成します。",
+                "steam_running_title": "先にSteamを終了してください",
+                "steam_running": "Steamが起動中のため、まだ何も追加されていません。",
+                "steam_running_why": "このままではSteamが変更を元に戻してしまいます。Steamは非Steamゲームの一覧をメモリに保持し、終了時にその内容を書き戻すためです。",
+                "steam_running_detail": "Steamを完全に終了してください。時計の横にある通知領域のSteamアイコンを右クリックし、「終了」を選びます。ウィンドウを閉じるだけでは不十分です。その後、もう一度「Steamに追加」を押してください。",
+                "steam_added_title": "Steamに追加しました",
+                "steam_added": "%s をSteamライブラリの非Steamゲームに追加しました。",
+                "steam_added_detail": "次回Steamを起動したときに表示されます。",
+                "steam_already_title": "すでにSteamにあります",
+                "steam_already": "%s はすでにSteamライブラリにあります。",
+                "steam_already_detail": "何も変更していません。もう一度追加する場合は、先にSteamから削除してください。",
+                "steam_failed_title": "Steamに追加できませんでした",
+                "steam_blocked": "Steamの非Steamゲーム一覧を更新できませんでした。",
+                "steam_blocked_detail": "Steamを完全に終了してから、もう一度お試しください。何も変更しておらず、以前の一覧はそのままです。",
+                "steam_unread": "Steamの非Steamゲーム一覧を読み込めませんでした。",
+                "steam_unread_detail": "Steamを完全に終了してから、もう一度お試しください。",
+                "uninstaller_detail": "代わりにWindowsの「設定」の「アプリ」からゲームをアンインストールしてください。",
+                "bonus_detail": "このディスクはボーナスフォルダーなしで作成されています。",
+                "mods_detail": "このディスクのmodsフォルダーにMODツールが見つかりませんでした。",
+                "looked_for": "検索対象: %s",
+                "looked_in": "検索場所:",
+                "and_more": "…ほか %d 件",
+                "play_again": "まずもう一度「ゲームを開始」をお試しください。インストールしたばかりのフォルダーは、まだスキャン中のことがあります。それでも失敗する場合は、ゲームフォルダーのコピーが完了していない可能性があります。",
                 "yes": "はい", "no": "いいえ", "cancel": "キャンセル"
             },
             "Korean": {
@@ -8800,6 +12621,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "이 디스크에 담긴 모드 도구를 엽니다.",
                 "tip_steam": "게임을 Steam 라이브러리에 추가하여 거기서 실행할 수 있게 합니다.",
                 "tip_uninstall": "설치된 게임을 제거합니다. 저장 파일은 그대로 유지됩니다.",
+                "choose_game": "게임 선택", "sort_disc": "디스크 순서", "sort_az": "이름순",
+                "tip_star": "게임에 별표를 하면 메인 메뉴 맨 위에 표시됩니다.",
+                "play_games": "게임 시작", "steam": "Steam에 추가",
+                "ok": "확인",
+                "steam_none_title": "추가할 항목 없음",
+                "steam_none": "Steam 라이브러리에 추가할 게임을 찾지 못했습니다.",
+                "steam_none_detail": "먼저 디스크에서 게임을 설치한 다음 다시 시도하세요.",
+                "steam_missing_title": "Steam을 찾을 수 없음",
+                "steam_missing": "이 PC에서 Steam 프로필을 찾지 못했습니다.",
+                "steam_missing_detail": "Steam을 설치하고 한 번 로그인한 다음 다시 시도하세요. Steam은 처음 로그인한 후에야 필요한 폴더를 만듭니다.",
+                "steam_running_title": "먼저 Steam을 종료하세요",
+                "steam_running": "Steam이 실행 중이어서 아직 아무것도 추가하지 않았습니다.",
+                "steam_running_why": "그대로 두면 Steam이 변경 내용을 되돌립니다. Steam은 비 Steam 게임 목록을 메모리에 보관하다가 종료할 때 그 사본을 다시 저장합니다.",
+                "steam_running_detail": "Steam을 완전히 종료하세요. 시계 옆 알림 영역에서 Steam 아이콘을 마우스 오른쪽 버튼으로 클릭하고 ‘종료’를 선택합니다. 창을 닫는 것만으로는 부족합니다. 그런 다음 ‘Steam에 추가’를 다시 누르세요.",
+                "steam_added_title": "Steam에 추가됨",
+                "steam_added": "%s 게임이 이제 Steam 라이브러리의 비 Steam 게임 항목에 있습니다.",
+                "steam_added_detail": "다음에 Steam을 시작하면 표시됩니다.",
+                "steam_already_title": "이미 Steam에 있음",
+                "steam_already": "%s 게임은 이미 Steam 라이브러리에 있습니다.",
+                "steam_already_detail": "아무것도 변경하지 않았습니다. 다시 추가하려면 먼저 Steam에서 제거하세요.",
+                "steam_failed_title": "Steam에 추가할 수 없음",
+                "steam_blocked": "Steam의 비 Steam 게임 목록을 업데이트할 수 없습니다.",
+                "steam_blocked_detail": "Steam을 완전히 종료한 다음 다시 시도하세요. 아무것도 변경하지 않았으며 이전 목록은 그대로입니다.",
+                "steam_unread": "Steam의 비 Steam 게임 목록을 읽을 수 없습니다.",
+                "steam_unread_detail": "Steam을 완전히 종료한 다음 다시 시도하세요.",
+                "uninstaller_detail": "대신 Windows 설정의 앱에서 게임을 제거하세요.",
+                "bonus_detail": "이 디스크는 보너스 폴더 없이 만들어졌습니다.",
+                "mods_detail": "이 디스크의 mods 폴더에서 모드 도구를 찾지 못했습니다.",
+                "looked_for": "찾으려던 항목: %s",
+                "looked_in": "검색한 위치:",
+                "and_more": "... 외 %d개",
+                "play_again": "먼저 ‘게임 시작’을 한 번 더 눌러 보세요. 방금 설치한 폴더는 아직 검사 중일 때가 있습니다. 계속 실패하면 게임 폴더 복사가 끝나지 않았을 수 있습니다.",
                 "yes": "예", "no": "아니요", "cancel": "취소"
             },
             "Norwegian": {
@@ -8817,6 +12670,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Åpner modverktøyet på denne platen.",
                 "tip_steam": "Legger spillet til i Steam-biblioteket ditt så du kan starte det derfra.",
                 "tip_uninstall": "Fjerner det installerte spillet. Lagringsfilene dine røres ikke.",
+                "choose_game": "Velg spillet ditt", "sort_disc": "Som på platen", "sort_az": "A til Å",
+                "tip_star": "Gi et spill en stjerne, så kommer det øverst på hovedmenyen.",
+                "play_games": "Spill", "steam": "Legg til i Steam",
+                "ok": "OK",
+                "steam_none_title": "Ingenting å legge til",
+                "steam_none": "Fant ikke noe spill å legge til i Steam-biblioteket ditt.",
+                "steam_none_detail": "Installer spillet fra platen først, og prøv deretter på nytt.",
+                "steam_missing_title": "Fant ikke Steam",
+                "steam_missing": "Fant ingen Steam-profil på denne PC-en.",
+                "steam_missing_detail": "Installer Steam og logg på én gang, og prøv deretter på nytt. Steam oppretter mappen som trengs først etter den første påloggingen.",
+                "steam_running_title": "Avslutt Steam først",
+                "steam_running": "Steam kjører, så ingenting er lagt til ennå.",
+                "steam_running_why": "Steam ville angret det: Steam holder listen over ikke-Steam-spill i minnet og skriver den kopien tilbake når programmet lukkes.",
+                "steam_running_detail": "Avslutt Steam helt: Høyreklikk på Steam-ikonet i varslingsområdet ved klokken, og velg Avslutt. Det er ikke nok å lukke vinduet. Trykk deretter på «Legg til i Steam» igjen.",
+                "steam_added_title": "Lagt til i Steam",
+                "steam_added": "%s ligger nå i Steam-biblioteket ditt, under ikke-Steam-spill.",
+                "steam_added_detail": "Det vil være der neste gang du starter Steam.",
+                "steam_already_title": "Allerede i Steam",
+                "steam_already": "%s ligger allerede i Steam-biblioteket ditt.",
+                "steam_already_detail": "Ingenting ble endret. Fjern det fra Steam først hvis du vil legge det til på nytt.",
+                "steam_failed_title": "Kunne ikke legge til i Steam",
+                "steam_blocked": "Steams liste over ikke-Steam-spill kunne ikke oppdateres.",
+                "steam_blocked_detail": "Lukk Steam helt, og prøv på nytt. Ingenting ble endret, og den forrige listen er urørt.",
+                "steam_unread": "Steams liste over ikke-Steam-spill kunne ikke leses.",
+                "steam_unread_detail": "Lukk Steam helt, og prøv på nytt.",
+                "uninstaller_detail": "Avinstaller heller spillet fra Innstillinger, Apper i Windows.",
+                "bonus_detail": "Denne platen ble laget uten bonusmappe.",
+                "mods_detail": "Fant ikke noe mod-verktøy i mods-mappen på denne platen.",
+                "looked_for": "Så etter: %s",
+                "looked_in": "Så i:",
+                "and_more": "... og %d til",
+                "play_again": "Prøv «Spill» én gang til først: En nyinstallert mappe blir noen ganger fortsatt skannet. Hvis det fortsetter å mislykkes, er kanskje ikke spillmappen ferdig kopiert.",
                 "yes": "Ja", "no": "Nei", "cancel": "Avbryt"
             },
             "Polish": {
@@ -8834,6 +12719,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Otwiera narzędzie do modów z tej płyty.",
                 "tip_steam": "Dodaje grę do twojej biblioteki Steam, byś mógł uruchamiać ją stamtąd.",
                 "tip_uninstall": "Usuwa zainstalowaną grę. Twoje zapisy pozostają nienaruszone.",
+                "choose_game": "Wybierz grę", "sort_disc": "Jak na płycie", "sort_az": "Od A do Z",
+                "tip_star": "Oznacz grę gwiazdką, a pojawi się na górze menu głównego.",
+                "play_games": "Graj", "steam": "Dodaj do Steama",
+                "ok": "OK",
+                "steam_none_title": "Nie ma czego dodać",
+                "steam_none": "Nie znaleziono gry, którą można dodać do twojej biblioteki Steam.",
+                "steam_none_detail": "Najpierw zainstaluj grę z płyty, a potem spróbuj ponownie.",
+                "steam_missing_title": "Nie znaleziono Steam",
+                "steam_missing": "Na tym komputerze nie znaleziono profilu Steam.",
+                "steam_missing_detail": "Zainstaluj Steam i zaloguj się raz, a potem spróbuj ponownie. Steam tworzy potrzebny folder dopiero po pierwszym zalogowaniu.",
+                "steam_running_title": "Najpierw zamknij Steam",
+                "steam_running": "Steam jest uruchomiony, więc jeszcze nic nie zostało dodane.",
+                "steam_running_why": "Steam cofnąłby tę zmianę: trzyma listę gier spoza Steam w pamięci i przy zamykaniu zapisuje z powrotem tę kopię.",
+                "steam_running_detail": "Całkowicie zamknij Steam: kliknij prawym przyciskiem myszy ikonę Steam w obszarze powiadomień obok zegara i wybierz Wyjdź. Zamknięcie okna nie wystarczy. Potem ponownie naciśnij „Dodaj do Steama”.",
+                "steam_added_title": "Dodano do Steam",
+                "steam_added": "%s jest teraz w twojej bibliotece Steam, wśród gier spoza Steam.",
+                "steam_added_detail": "Pojawi się tam przy następnym uruchomieniu Steam.",
+                "steam_already_title": "Już jest w Steam",
+                "steam_already": "%s jest już w twojej bibliotece Steam.",
+                "steam_already_detail": "Nic nie zostało zmienione. Jeśli chcesz dodać grę ponownie, najpierw usuń ją ze Steam.",
+                "steam_failed_title": "Nie udało się dodać do Steam",
+                "steam_blocked": "Nie udało się zaktualizować listy gier spoza Steam w Steam.",
+                "steam_blocked_detail": "Całkowicie zamknij Steam i spróbuj ponownie. Nic nie zostało zmienione, a poprzednia lista jest nienaruszona.",
+                "steam_unread": "Nie udało się odczytać listy gier spoza Steam w Steam.",
+                "steam_unread_detail": "Całkowicie zamknij Steam i spróbuj ponownie.",
+                "uninstaller_detail": "Zamiast tego odinstaluj grę w systemie Windows: Ustawienia, Aplikacje.",
+                "bonus_detail": "Ta płyta została utworzona bez folderu z bonusami.",
+                "mods_detail": "W folderze mods na tej płycie nie znaleziono narzędzia do modów.",
+                "looked_for": "Szukano: %s",
+                "looked_in": "Szukano w:",
+                "and_more": "... i %d więcej",
+                "play_again": "Najpierw spróbuj jeszcze raz „Graj”: świeżo zainstalowany folder jest czasem jeszcze skanowany. Jeśli nadal się nie udaje, kopiowanie folderu gry mogło się nie zakończyć.",
                 "yes": "Tak", "no": "Nie", "cancel": "Anuluj"
             },
             "Portuguese": {
@@ -8851,6 +12768,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Abre a ferramenta de mods que vem neste disco.",
                 "tip_steam": "Adiciona o jogo à sua biblioteca Steam para o iniciar a partir daí.",
                 "tip_uninstall": "Remove o jogo instalado. Os seus jogos guardados não são afetados.",
+                "choose_game": "Escolha o seu jogo", "sort_disc": "Como no disco", "sort_az": "De A a Z",
+                "tip_star": "Marque um jogo com uma estrela para o pôr no topo do menu principal.",
+                "play_games": "Jogar", "steam": "Adicionar ao Steam",
+                "ok": "OK",
+                "steam_none_title": "Nada para adicionar",
+                "steam_none": "Não foi encontrado nenhum jogo para adicionar à sua biblioteca Steam.",
+                "steam_none_detail": "Instale primeiro o jogo a partir do disco e, depois, tente novamente.",
+                "steam_missing_title": "Steam não encontrado",
+                "steam_missing": "Não foi encontrado nenhum perfil Steam neste PC.",
+                "steam_missing_detail": "Instale o Steam e inicie sessão uma vez e, depois, tente novamente. O Steam só cria a pasta necessária depois do primeiro início de sessão.",
+                "steam_running_title": "Saia primeiro do Steam",
+                "steam_running": "O Steam está em execução, por isso ainda não foi adicionado nada.",
+                "steam_running_why": "O Steam iria anular a alteração: mantém a lista de jogos não Steam na memória e volta a gravar essa cópia quando é fechado.",
+                "steam_running_detail": "Saia completamente do Steam: clique com o botão direito no ícone do Steam na área de notificação, junto ao relógio, e escolha Sair. Fechar a janela não chega. Depois, prima novamente «Adicionar ao Steam».",
+                "steam_added_title": "Adicionado ao Steam",
+                "steam_added": "%s está agora na sua biblioteca Steam, nos jogos não Steam.",
+                "steam_added_detail": "Estará lá da próxima vez que iniciar o Steam.",
+                "steam_already_title": "Já está no Steam",
+                "steam_already": "%s já está na sua biblioteca Steam.",
+                "steam_already_detail": "Não foi alterado nada. Remova-o primeiro do Steam se quiser adicioná-lo novamente.",
+                "steam_failed_title": "Não foi possível adicionar ao Steam",
+                "steam_blocked": "Não foi possível atualizar a lista de jogos não Steam do Steam.",
+                "steam_blocked_detail": "Feche completamente o Steam e tente novamente. Não foi alterado nada e a lista anterior está intacta.",
+                "steam_unread": "Não foi possível ler a lista de jogos não Steam do Steam.",
+                "steam_unread_detail": "Feche completamente o Steam e tente novamente.",
+                "uninstaller_detail": "Em vez disso, desinstale o jogo em Definições, Aplicações do Windows.",
+                "bonus_detail": "Este disco foi criado sem uma pasta de bónus.",
+                "mods_detail": "Não foi encontrada nenhuma ferramenta de mods na pasta mods deste disco.",
+                "looked_for": "Procurado: %s",
+                "looked_in": "Procurado em:",
+                "and_more": "... e mais %d",
+                "play_again": "Experimente primeiro «Jogar» mais uma vez: uma pasta acabada de instalar por vezes ainda está a ser analisada. Se continuar a falhar, a cópia da pasta do jogo pode não ter terminado.",
                 "yes": "Sim", "no": "Não", "cancel": "Cancelar"
             },
             "Portuguese (Brazil)": {
@@ -8868,6 +12817,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Abre a ferramenta de mods que veio neste disco.",
                 "tip_steam": "Adiciona o jogo à sua biblioteca Steam para iniciá-lo por lá.",
                 "tip_uninstall": "Remove o jogo instalado. Seus jogos salvos não são afetados.",
+                "choose_game": "Escolha seu jogo", "sort_disc": "Como no disco", "sort_az": "De A a Z",
+                "tip_star": "Marque um jogo com uma estrela para colocá-lo no topo do menu principal.",
+                "play_games": "Jogar", "steam": "Adicionar ao Steam",
+                "ok": "OK",
+                "steam_none_title": "Nada para adicionar",
+                "steam_none": "Nenhum jogo foi encontrado para adicionar à sua biblioteca Steam.",
+                "steam_none_detail": "Primeiro instale o jogo pelo disco e depois tente de novo.",
+                "steam_missing_title": "Steam não encontrada",
+                "steam_missing": "Nenhum perfil da Steam foi encontrado neste PC.",
+                "steam_missing_detail": "Instale a Steam e faça login uma vez, depois tente de novo. A Steam só cria a pasta necessária depois do primeiro login.",
+                "steam_running_title": "Saia da Steam primeiro",
+                "steam_running": "A Steam está aberta, então nada foi adicionado ainda.",
+                "steam_running_why": "A Steam desfaria a alteração: ela mantém a lista de jogos não Steam na memória e grava essa cópia de volta ao ser fechada.",
+                "steam_running_detail": "Saia completamente da Steam: clique com o botão direito no ícone da Steam na área de notificação, ao lado do relógio, e escolha Sair. Fechar a janela não basta. Depois, clique de novo no botão Adicionar ao Steam.",
+                "steam_added_title": "Adicionado à Steam",
+                "steam_added": "%s agora está na sua biblioteca Steam, em jogos não Steam.",
+                "steam_added_detail": "Ele vai aparecer lá na próxima vez que você abrir a Steam.",
+                "steam_already_title": "Já está na Steam",
+                "steam_already": "%s já está na sua biblioteca Steam.",
+                "steam_already_detail": "Nada foi alterado. Remova o jogo da Steam primeiro se quiser adicioná-lo de novo.",
+                "steam_failed_title": "Não foi possível adicionar à Steam",
+                "steam_blocked": "Não foi possível atualizar a lista de jogos não Steam da Steam.",
+                "steam_blocked_detail": "Feche a Steam completamente e tente de novo. Nada foi alterado, e a lista anterior continua intacta.",
+                "steam_unread": "Não foi possível ler a lista de jogos não Steam da Steam.",
+                "steam_unread_detail": "Feche a Steam completamente e tente de novo.",
+                "uninstaller_detail": "Em vez disso, desinstale o jogo em Configurações, Aplicativos do Windows.",
+                "bonus_detail": "Este disco foi criado sem uma pasta de bônus.",
+                "mods_detail": "Nenhuma ferramenta de mods foi encontrada na pasta mods deste disco.",
+                "looked_for": "Procurado: %s",
+                "looked_in": "Procurado em:",
+                "and_more": "... e mais %d",
+                "play_again": "Tente clicar em Jogar mais uma vez primeiro: uma pasta recém-instalada às vezes ainda está sendo verificada. Se continuar falhando, talvez a cópia da pasta do jogo não tenha terminado.",
                 "yes": "Sim", "no": "Não", "cancel": "Cancelar"
             },
             "Romanian": {
@@ -8885,6 +12866,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Deschide instrumentul de moduri de pe acest disc.",
                 "tip_steam": "Adaugă jocul în biblioteca ta Steam ca să îl poți porni de acolo.",
                 "tip_uninstall": "Elimină jocul instalat. Salvările tale nu sunt atinse.",
+                "choose_game": "Alege-ți jocul", "sort_disc": "Ca pe disc", "sort_az": "De la A la Z",
+                "tip_star": "Marchează un joc cu o stea ca să apară în partea de sus a meniului principal.",
+                "play_games": "Joacă", "steam": "Adaugă în Steam",
+                "ok": "OK",
+                "steam_none_title": "Nimic de adăugat",
+                "steam_none": "Nu a fost găsit niciun joc de adăugat în biblioteca ta Steam.",
+                "steam_none_detail": "Instalează mai întâi jocul de pe disc, apoi încearcă din nou.",
+                "steam_missing_title": "Steam nu a fost găsit",
+                "steam_missing": "Nu a fost găsit niciun profil Steam pe acest PC.",
+                "steam_missing_detail": "Instalează Steam și conectează-te o dată, apoi încearcă din nou. Steam creează folderul necesar abia după prima conectare.",
+                "steam_running_title": "Mai întâi ieși din Steam",
+                "steam_running": "Steam rulează, așa că încă nu s-a adăugat nimic.",
+                "steam_running_why": "Steam ar anula modificarea: păstrează lista de jocuri non-Steam în memorie și scrie înapoi acea copie când se închide.",
+                "steam_running_detail": "Ieși complet din Steam: fă clic dreapta pe pictograma Steam din zona de notificare, lângă ceas, și alege Ieșire. Închiderea ferestrei nu este suficientă. Apoi apasă din nou „Adaugă în Steam”.",
+                "steam_added_title": "Adăugat în Steam",
+                "steam_added": "%s se află acum în biblioteca ta Steam, la jocurile non-Steam.",
+                "steam_added_detail": "Va fi acolo data viitoare când pornești Steam.",
+                "steam_already_title": "Deja în Steam",
+                "steam_already": "%s se află deja în biblioteca ta Steam.",
+                "steam_already_detail": "Nu s-a modificat nimic. Elimină-l mai întâi din Steam dacă vrei să-l adaugi din nou.",
+                "steam_failed_title": "Nu s-a putut adăuga în Steam",
+                "steam_blocked": "Lista de jocuri non-Steam din Steam nu a putut fi actualizată.",
+                "steam_blocked_detail": "Închide complet Steam și încearcă din nou. Nu s-a modificat nimic, iar lista anterioară a rămas neatinsă.",
+                "steam_unread": "Lista de jocuri non-Steam din Steam nu a putut fi citită.",
+                "steam_unread_detail": "Închide complet Steam și încearcă din nou.",
+                "uninstaller_detail": "Dezinstalează în schimb jocul din Setări, Aplicații în Windows.",
+                "bonus_detail": "Acest disc a fost creat fără un folder bonus.",
+                "mods_detail": "Nu a fost găsit niciun instrument pentru moduri în folderul mods de pe acest disc.",
+                "looked_for": "S-a căutat: %s",
+                "looked_in": "S-a căutat în:",
+                "and_more": "... și încă %d",
+                "play_again": "Încearcă mai întâi încă o dată „Joacă”: un folder abia instalat este uneori încă scanat. Dacă eșuează în continuare, este posibil ca folderul jocului să nu se fi copiat complet.",
                 "yes": "Da", "no": "Nu", "cancel": "Anulează"
             },
             "Russian": {
@@ -8902,6 +12915,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Открывает инструмент для модов с этого диска.",
                 "tip_steam": "Добавляет игру в вашу библиотеку Steam, чтобы запускать её оттуда.",
                 "tip_uninstall": "Удаляет установленную игру. Ваши сохранения не затрагиваются.",
+                "choose_game": "Выберите игру", "sort_disc": "Как на диске", "sort_az": "От А до Я",
+                "tip_star": "Отметьте игру звёздочкой, и она окажется вверху главного меню.",
+                "play_games": "Играть", "steam": "Добавить в Steam",
+                "ok": "ОК",
+                "steam_none_title": "Нечего добавить",
+                "steam_none": "Не найдено ни одной игры для добавления в вашу библиотеку Steam.",
+                "steam_none_detail": "Сначала установите игру с диска, затем повторите попытку.",
+                "steam_missing_title": "Steam не найден",
+                "steam_missing": "На этом компьютере не найден профиль Steam.",
+                "steam_missing_detail": "Установите Steam и войдите в аккаунт хотя бы один раз, затем повторите попытку. Steam создаёт нужную папку только после первого входа.",
+                "steam_running_title": "Сначала закройте Steam",
+                "steam_running": "Steam запущен, поэтому пока ничего не добавлено.",
+                "steam_running_why": "Steam отменил бы изменения: он хранит список сторонних игр в памяти и при закрытии записывает эту копию обратно.",
+                "steam_running_detail": "Полностью закройте Steam: щёлкните правой кнопкой мыши по значку Steam в области уведомлений рядом с часами и выберите Выход. Закрыть окно недостаточно. Затем снова нажмите «Добавить в Steam».",
+                "steam_added_title": "Добавлено в Steam",
+                "steam_added": "%s теперь в вашей библиотеке Steam, среди сторонних игр.",
+                "steam_added_detail": "Игра появится там при следующем запуске Steam.",
+                "steam_already_title": "Уже в Steam",
+                "steam_already": "%s уже есть в вашей библиотеке Steam.",
+                "steam_already_detail": "Ничего не изменено. Если хотите добавить игру заново, сначала удалите её из Steam.",
+                "steam_failed_title": "Не удалось добавить в Steam",
+                "steam_blocked": "Не удалось обновить список сторонних игр в Steam.",
+                "steam_blocked_detail": "Полностью закройте Steam и повторите попытку. Ничего не изменено, прежний список не тронут.",
+                "steam_unread": "Не удалось прочитать список сторонних игр в Steam.",
+                "steam_unread_detail": "Полностью закройте Steam и повторите попытку.",
+                "uninstaller_detail": "Вместо этого удалите игру через Параметры Windows, раздел Приложения.",
+                "bonus_detail": "Этот диск создан без папки с бонусами.",
+                "mods_detail": "В папке mods на этом диске не найден инструмент для модов.",
+                "looked_for": "Искали: %s",
+                "looked_in": "Где искали:",
+                "and_more": "... и ещё %d",
+                "play_again": "Сначала попробуйте нажать «Играть» ещё раз: только что установленная папка иногда ещё проверяется. Если ошибка повторяется, возможно, папка игры скопировалась не полностью.",
                 "yes": "Да", "no": "Нет", "cancel": "Отмена"
             },
             "Serbian": {
@@ -8919,6 +12964,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Otvara alat za modove sa ovog diska.",
                 "tip_steam": "Dodaje igru u vašu Steam biblioteku da biste je pokretali odatle.",
                 "tip_uninstall": "Uklanja instaliranu igru. Vaši snimci igre ostaju netaknuti.",
+                "choose_game": "Izaberite igru", "sort_disc": "Kao na disku", "sort_az": "Od A do Ž",
+                "tip_star": "Označite igru zvezdicom i biće na vrhu glavnog menija.",
+                "play_games": "Igraj", "steam": "Dodaj u Steam",
+                "ok": "U redu",
+                "steam_none_title": "Nema šta da se doda",
+                "steam_none": "Nije pronađena nijedna igra koja bi se dodala u vašu Steam biblioteku.",
+                "steam_none_detail": "Prvo instalirajte igru sa diska, a zatim pokušajte ponovo.",
+                "steam_missing_title": "Steam nije pronađen",
+                "steam_missing": "Na ovom računaru nije pronađen nijedan Steam profil.",
+                "steam_missing_detail": "Instalirajte Steam i prijavite se jednom, a zatim pokušajte ponovo. Steam tek posle prve prijave pravi fasciklu koja je za ovo potrebna.",
+                "steam_running_title": "Prvo izađite iz Steama",
+                "steam_running": "Steam je pokrenut, pa još ništa nije dodato.",
+                "steam_running_why": "Steam bi to poništio: svoju listu igara van Steama drži u memoriji i pri zatvaranju upisuje tu kopiju nazad.",
+                "steam_running_detail": "Potpuno izađite iz Steama: kliknite desnim tasterom miša na ikonu Steama u oblasti za obaveštenja pored sata i izaberite Exit. Zatvaranje prozora nije dovoljno. Zatim ponovo pritisnite „Dodaj u Steam”.",
+                "steam_added_title": "Dodato u Steam",
+                "steam_added": "%s se sada nalazi u vašoj Steam biblioteci, među igrama van Steama.",
+                "steam_added_detail": "Biće tamo sledeći put kada pokrenete Steam.",
+                "steam_already_title": "Već je u Steamu",
+                "steam_already": "%s se već nalazi u vašoj Steam biblioteci.",
+                "steam_already_detail": "Ništa nije promenjeno. Ako želite da je ponovo dodate, prvo je uklonite iz Steama.",
+                "steam_failed_title": "Dodavanje u Steam nije uspelo",
+                "steam_blocked": "Steam lista igara van Steama nije mogla da se ažurira.",
+                "steam_blocked_detail": "Potpuno zatvorite Steam i pokušajte ponovo. Ništa nije promenjeno, a prethodna lista je ostala netaknuta.",
+                "steam_unread": "Steam lista igara van Steama nije mogla da se pročita.",
+                "steam_unread_detail": "Potpuno zatvorite Steam i pokušajte ponovo.",
+                "uninstaller_detail": "Umesto toga deinstalirajte igru u sistemu Windows: Podešavanja, Aplikacije.",
+                "bonus_detail": "Ovaj disk je napravljen bez fascikle sa bonus sadržajem.",
+                "mods_detail": "U fascikli mods na ovom disku nije pronađen alat za modove.",
+                "looked_for": "Traženo: %s",
+                "looked_in": "Traženo u:",
+                "and_more": "... i još %d",
+                "play_again": "Prvo još jednom pokušajte „Igraj”: tek instalirana fascikla se ponekad još skenira. Ako i dalje ne uspeva, kopiranje fascikle igre možda nije završeno.",
                 "yes": "Da", "no": "Ne", "cancel": "Otkaži"
             },
             "Slovak": {
@@ -8936,6 +13013,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Otvorí nástroj na módy z tohto disku.",
                 "tip_steam": "Pridá hru do vašej knižnice Steam, aby ste ju mohli spustiť odtiaľ.",
                 "tip_uninstall": "Odstráni nainštalovanú hru. Vaše uložené pozície zostanú zachované.",
+                "choose_game": "Vyberte hru", "sort_disc": "Ako na disku", "sort_az": "Od A po Z",
+                "tip_star": "Označte hru hviezdičkou a zobrazí sa navrchu hlavnej ponuky.",
+                "play_games": "Hrať", "steam": "Pridať do Steamu",
+                "ok": "OK",
+                "steam_none_title": "Nie je čo pridať",
+                "steam_none": "Nenašla sa žiadna hra, ktorú by bolo možné pridať do vašej knižnice Steam.",
+                "steam_none_detail": "Najprv nainštalujte hru z disku a potom to skúste znova.",
+                "steam_missing_title": "Steam sa nenašiel",
+                "steam_missing": "V tomto počítači sa nenašiel žiadny profil Steam.",
+                "steam_missing_detail": "Nainštalujte Steam, raz sa prihláste a potom to skúste znova. Steam vytvorí potrebný priečinok až po prvom prihlásení.",
+                "steam_running_title": "Najprv ukončite Steam",
+                "steam_running": "Steam je spustený, preto zatiaľ nebolo nič pridané.",
+                "steam_running_why": "Steam by zmenu vrátil: zoznam hier mimo Steamu drží v pamäti a pri zatvorení túto kópiu znova zapíše.",
+                "steam_running_detail": "Steam úplne ukončite: kliknite pravým tlačidlom na ikonu Steamu v oblasti oznámení vedľa hodín a vyberte Exit. Zatvoriť okno nestačí. Potom znova stlačte „Pridať do Steamu“.",
+                "steam_added_title": "Pridané do Steamu",
+                "steam_added": "%s je teraz vo vašej knižnici Steam medzi hrami mimo Steamu.",
+                "steam_added_detail": "Objaví sa tam pri ďalšom spustení Steamu.",
+                "steam_already_title": "Už je v Steame",
+                "steam_already": "%s už je vo vašej knižnici Steam.",
+                "steam_already_detail": "Nič sa nezmenilo. Ak ju chcete pridať znova, najprv ju zo Steamu odstráňte.",
+                "steam_failed_title": "Pridanie do Steamu zlyhalo",
+                "steam_blocked": "Zoznam hier mimo Steamu sa v Steame nepodarilo aktualizovať.",
+                "steam_blocked_detail": "Steam úplne zatvorte a skúste to znova. Nič sa nezmenilo a predchádzajúci zoznam zostal nedotknutý.",
+                "steam_unread": "Zoznam hier mimo Steamu sa v Steame nepodarilo prečítať.",
+                "steam_unread_detail": "Steam úplne zatvorte a skúste to znova.",
+                "uninstaller_detail": "Hru namiesto toho odinštalujte vo Windowse v časti Nastavenia, Aplikácie.",
+                "bonus_detail": "Tento disk bol vytvorený bez priečinka s bonusovým obsahom.",
+                "mods_detail": "V priečinku mods na tomto disku sa nenašiel žiadny nástroj na módy.",
+                "looked_for": "Hľadané: %s",
+                "looked_in": "Hľadané v:",
+                "and_more": "... a ďalších %d",
+                "play_again": "Najprv skúste ešte raz „Hrať“: čerstvo nainštalovaný priečinok sa niekedy ešte kontroluje. Ak to stále zlyháva, kopírovanie priečinka hry možno nebolo dokončené.",
                 "yes": "Áno", "no": "Nie", "cancel": "Zrušiť"
             },
             "Spanish": {
@@ -8953,6 +13062,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Abre la herramienta de mods incluida en este disco.",
                 "tip_steam": "Añade el juego a tu biblioteca de Steam para iniciarlo desde ahí.",
                 "tip_uninstall": "Elimina el juego instalado. Tus partidas guardadas no se tocan.",
+                "choose_game": "Elige tu juego", "sort_disc": "Como en el disco", "sort_az": "De la A a la Z",
+                "tip_star": "Marca un juego con una estrella para ponerlo arriba en el menú principal.",
+                "play_games": "Jugar", "steam": "Añadir a Steam",
+                "ok": "Aceptar",
+                "steam_none_title": "Nada que añadir",
+                "steam_none": "No se encontró ningún juego para añadir a tu biblioteca de Steam.",
+                "steam_none_detail": "Primero instala el juego desde el disco y luego vuelve a intentarlo.",
+                "steam_missing_title": "No se encontró Steam",
+                "steam_missing": "No se encontró ningún perfil de Steam en este PC.",
+                "steam_missing_detail": "Instala Steam e inicia sesión una vez, y luego vuelve a intentarlo. Steam solo crea la carpeta necesaria después del primer inicio de sesión.",
+                "steam_running_title": "Primero sal de Steam",
+                "steam_running": "Steam está abierto, así que todavía no se ha añadido nada.",
+                "steam_running_why": "Steam desharía el cambio: guarda en memoria su lista de juegos ajenos a Steam y vuelve a escribir esa copia al cerrarse.",
+                "steam_running_detail": "Sal de Steam por completo: haz clic derecho en el icono de Steam en el área de notificación, junto al reloj, y elige Salir. Cerrar la ventana no basta. Después, pulsa otra vez «Añadir a Steam».",
+                "steam_added_title": "Añadido a Steam",
+                "steam_added": "%s se ha añadido a tu biblioteca de Steam, en los juegos ajenos a Steam.",
+                "steam_added_detail": "Lo verás allí la próxima vez que inicies Steam.",
+                "steam_already_title": "Ya está en Steam",
+                "steam_already": "%s ya está en tu biblioteca de Steam.",
+                "steam_already_detail": "No se ha cambiado nada. Si quieres volver a añadirlo, quítalo primero de Steam.",
+                "steam_failed_title": "No se pudo añadir a Steam",
+                "steam_blocked": "No se pudo actualizar la lista de juegos ajenos a Steam de Steam.",
+                "steam_blocked_detail": "Cierra Steam por completo y vuelve a intentarlo. No se ha cambiado nada y la lista anterior sigue intacta.",
+                "steam_unread": "No se pudo leer la lista de juegos ajenos a Steam de Steam.",
+                "steam_unread_detail": "Cierra Steam por completo y vuelve a intentarlo.",
+                "uninstaller_detail": "En su lugar, desinstala el juego desde Configuración, Aplicaciones de Windows.",
+                "bonus_detail": "Este disco se creó sin carpeta de contenido extra.",
+                "mods_detail": "No se encontró ninguna herramienta de mods en la carpeta mods de este disco.",
+                "looked_for": "Se buscó: %s",
+                "looked_in": "Se buscó en:",
+                "and_more": "... y %d más",
+                "play_again": "Prueba primero «Jugar» una vez más: a veces una carpeta recién instalada todavía se está analizando. Si sigue fallando, puede que la carpeta del juego no haya terminado de copiarse.",
                 "yes": "Sí", "no": "No", "cancel": "Cancelar"
             },
             "Swedish": {
@@ -8970,6 +13111,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Öppnar modverktyget på den här skivan.",
                 "tip_steam": "Lägger till spelet i ditt Steam-bibliotek så att du kan starta det därifrån.",
                 "tip_uninstall": "Tar bort det installerade spelet. Dina sparfiler rörs inte.",
+                "choose_game": "Välj ditt spel", "sort_disc": "Som på skivan", "sort_az": "A till Ö",
+                "tip_star": "Stjärnmärk ett spel så hamnar det överst i huvudmenyn.",
+                "play_games": "Spela", "steam": "Lägg till i Steam",
+                "ok": "OK",
+                "steam_none_title": "Inget att lägga till",
+                "steam_none": "Inget spel hittades att lägga till i ditt Steam-bibliotek.",
+                "steam_none_detail": "Installera spelet från skivan först och försök sedan igen.",
+                "steam_missing_title": "Steam hittades inte",
+                "steam_missing": "Ingen Steam-profil hittades på den här datorn.",
+                "steam_missing_detail": "Installera Steam och logga in en gång, och försök sedan igen. Steam skapar mappen som behövs först efter den första inloggningen.",
+                "steam_running_title": "Avsluta Steam först",
+                "steam_running": "Steam körs, så inget har lagts till än.",
+                "steam_running_why": "Steam skulle ångra det: Steam håller sin lista över icke-Steam-spel i minnet och skriver tillbaka den kopian när programmet stängs.",
+                "steam_running_detail": "Avsluta Steam helt: högerklicka på Steam-ikonen i meddelandefältet vid klockan och välj Avsluta. Det räcker inte att stänga fönstret. Tryck sedan på ”Lägg till i Steam” igen.",
+                "steam_added_title": "Tillagt i Steam",
+                "steam_added": "%s finns nu i ditt Steam-bibliotek, under icke-Steam-spel.",
+                "steam_added_detail": "Det finns där nästa gång du startar Steam.",
+                "steam_already_title": "Redan i Steam",
+                "steam_already": "%s finns redan i ditt Steam-bibliotek.",
+                "steam_already_detail": "Inget ändrades. Ta bort det från Steam först om du vill lägga till det igen.",
+                "steam_failed_title": "Kunde inte lägga till i Steam",
+                "steam_blocked": "Steams lista över icke-Steam-spel kunde inte uppdateras.",
+                "steam_blocked_detail": "Stäng Steam helt och försök igen. Inget ändrades, och den tidigare listan är orörd.",
+                "steam_unread": "Steams lista över icke-Steam-spel kunde inte läsas.",
+                "steam_unread_detail": "Stäng Steam helt och försök igen.",
+                "uninstaller_detail": "Avinstallera i stället spelet under Inställningar, Appar i Windows.",
+                "bonus_detail": "Den här skivan skapades utan bonusmapp.",
+                "mods_detail": "Inget modverktyg hittades i mods-mappen på den här skivan.",
+                "looked_for": "Letade efter: %s",
+                "looked_in": "Letade i:",
+                "and_more": "... och %d till",
+                "play_again": "Prova ”Spela” en gång till först: en nyinstallerad mapp skannas ibland fortfarande. Om det fortsätter att misslyckas kanske spelmappen inte har kopierats klart.",
                 "yes": "Ja", "no": "Nej", "cancel": "Avbryt"
             },
             "Thai": {
@@ -8987,6 +13160,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "เปิดเครื่องมือม็อดที่มาพร้อมแผ่นนี้",
                 "tip_steam": "เพิ่มเกมลงในคลัง Steam ของคุณเพื่อเปิดเล่นจากที่นั่น",
                 "tip_uninstall": "ลบเกมที่ติดตั้งไว้ ไฟล์บันทึกของคุณจะไม่ถูกแตะต้อง",
+                "choose_game": "เลือกเกมของคุณ", "sort_disc": "ตามลำดับในดิสก์", "sort_az": "เรียงตามชื่อ",
+                "tip_star": "ติดดาวให้เกมเพื่อให้แสดงอยู่บนสุดของเมนูหลัก",
+                "play_games": "เล่นเกม", "steam": "เพิ่มลงใน Steam",
+                "ok": "ตกลง",
+                "steam_none_title": "ไม่มีอะไรให้เพิ่ม",
+                "steam_none": "ไม่พบเกมที่จะเพิ่มลงในคลัง Steam ของคุณ",
+                "steam_none_detail": "ติดตั้งเกมจากแผ่นก่อน แล้วลองอีกครั้ง",
+                "steam_missing_title": "ไม่พบ Steam",
+                "steam_missing": "ไม่พบโปรไฟล์ Steam บนพีซีเครื่องนี้",
+                "steam_missing_detail": "ติดตั้ง Steam และลงชื่อเข้าใช้หนึ่งครั้ง แล้วลองอีกครั้ง Steam จะสร้างโฟลเดอร์ที่จำเป็นหลังจากลงชื่อเข้าใช้ครั้งแรกเท่านั้น",
+                "steam_running_title": "ออกจาก Steam ก่อน",
+                "steam_running": "Steam กำลังทำงานอยู่ จึงยังไม่ได้เพิ่มอะไรเลย",
+                "steam_running_why": "Steam จะยกเลิกการเปลี่ยนแปลงนี้ เพราะ Steam เก็บรายการเกมที่ไม่ใช่ของ Steam ไว้ในหน่วยความจำ และเขียนสำเนานั้นกลับเมื่อปิดโปรแกรม",
+                "steam_running_detail": "ออกจาก Steam ให้หมด: คลิกขวาที่ไอคอน Steam ในพื้นที่แจ้งเตือนข้างนาฬิกา แล้วเลือก ออก การปิดหน้าต่างอย่างเดียวไม่พอ จากนั้นกด เพิ่มลงใน Steam อีกครั้ง",
+                "steam_added_title": "เพิ่มลงใน Steam แล้ว",
+                "steam_added": "%s อยู่ในคลัง Steam ของคุณแล้ว ในหมวดเกมที่ไม่ใช่ของ Steam",
+                "steam_added_detail": "เกมจะปรากฏที่นั่นเมื่อคุณเปิด Steam ครั้งถัดไป",
+                "steam_already_title": "มีอยู่ใน Steam แล้ว",
+                "steam_already": "%s อยู่ในคลัง Steam ของคุณอยู่แล้ว",
+                "steam_already_detail": "ไม่มีการเปลี่ยนแปลงใด ๆ หากต้องการเพิ่มอีกครั้ง ให้ลบออกจาก Steam ก่อน",
+                "steam_failed_title": "ไม่สามารถเพิ่มลงใน Steam",
+                "steam_blocked": "ไม่สามารถอัปเดตรายการเกมที่ไม่ใช่ของ Steam ใน Steam ได้",
+                "steam_blocked_detail": "ปิด Steam ให้หมดแล้วลองอีกครั้ง ไม่มีการเปลี่ยนแปลงใด ๆ และรายการเดิมยังอยู่ครบ",
+                "steam_unread": "ไม่สามารถอ่านรายการเกมที่ไม่ใช่ของ Steam ใน Steam ได้",
+                "steam_unread_detail": "ปิด Steam ให้หมดแล้วลองอีกครั้ง",
+                "uninstaller_detail": "ให้ถอนการติดตั้งเกมจาก การตั้งค่า > แอป ของ Windows แทน",
+                "bonus_detail": "แผ่นนี้สร้างขึ้นโดยไม่มีโฟลเดอร์โบนัส",
+                "mods_detail": "ไม่พบเครื่องมือม็อดในโฟลเดอร์ mods บนแผ่นนี้",
+                "looked_for": "สิ่งที่ค้นหา: %s",
+                "looked_in": "ตำแหน่งที่ค้นหา:",
+                "and_more": "... และอีก %d รายการ",
+                "play_again": "ลองกด เล่นเกม อีกครั้งก่อน เพราะโฟลเดอร์ที่เพิ่งติดตั้งบางครั้งยังถูกสแกนอยู่ หากยังล้มเหลวอยู่ อาจเป็นเพราะการคัดลอกโฟลเดอร์เกมยังไม่เสร็จ",
                 "yes": "ใช่", "no": "ไม่", "cancel": "ยกเลิก"
             },
             "Turkish": {
@@ -9004,6 +13209,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Bu diskteki mod aracını açar.",
                 "tip_steam": "Oyunu Steam kitaplığınıza ekler, böylece oradan başlatabilirsiniz.",
                 "tip_uninstall": "Kurulu oyunu kaldırır. Kayıtlarınıza dokunulmaz.",
+                "choose_game": "Oyununuzu seçin", "sort_disc": "Diskteki sırayla", "sort_az": "A'dan Z'ye",
+                "tip_star": "Ana menünün en üstünde görünmesi için bir oyunu yıldızla işaretleyin.",
+                "play_games": "Oyun Oyna", "steam": "Steam'e Ekle",
+                "ok": "Tamam",
+                "steam_none_title": "Eklenecek bir şey yok",
+                "steam_none": "Steam kitaplığınıza eklenecek bir oyun bulunamadı.",
+                "steam_none_detail": "Önce oyunu diskten kurun, sonra tekrar deneyin.",
+                "steam_missing_title": "Steam bulunamadı",
+                "steam_missing": "Bu bilgisayarda Steam profili bulunamadı.",
+                "steam_missing_detail": "Steam'i kurun ve bir kez oturum açın, sonra tekrar deneyin. Steam gereken klasörü ancak ilk oturum açıştan sonra oluşturur.",
+                "steam_running_title": "Önce Steam'den çıkın",
+                "steam_running": "Steam çalışıyor, bu yüzden henüz hiçbir şey eklenmedi.",
+                "steam_running_why": "Steam bunu geri alır: Steam dışı oyunlar listesini bellekte tutar ve kapanırken bu kopyayı geri yazar.",
+                "steam_running_detail": "Steam'den tamamen çıkın: saatin yanındaki bildirim alanında Steam simgesine sağ tıklayın ve Çıkış'ı seçin. Pencereyi kapatmak yeterli değildir. Ardından Steam'e Ekle düğmesine yeniden basın.",
+                "steam_added_title": "Steam'e Eklendi",
+                "steam_added": "%s artık Steam kitaplığınızda, Steam dışı oyunlar altında.",
+                "steam_added_detail": "Steam'i bir sonraki başlatışınızda orada olacak.",
+                "steam_already_title": "Zaten Steam'de",
+                "steam_already": "%s zaten Steam kitaplığınızda.",
+                "steam_already_detail": "Hiçbir şey değiştirilmedi. Yeniden eklemek istiyorsanız önce Steam'den kaldırın.",
+                "steam_failed_title": "Steam'e Eklenemedi",
+                "steam_blocked": "Steam'in Steam dışı oyunlar listesi güncellenemedi.",
+                "steam_blocked_detail": "Steam'i tamamen kapatıp tekrar deneyin. Hiçbir şey değiştirilmedi ve önceki liste olduğu gibi duruyor.",
+                "steam_unread": "Steam'in Steam dışı oyunlar listesi okunamadı.",
+                "steam_unread_detail": "Steam'i tamamen kapatıp tekrar deneyin.",
+                "uninstaller_detail": "Bunun yerine oyunu Windows Ayarlar, Uygulamalar bölümünden kaldırın.",
+                "bonus_detail": "Bu disk bonus klasörü olmadan oluşturulmuş.",
+                "mods_detail": "Bu diskteki mods klasöründe mod aracı bulunamadı.",
+                "looked_for": "Aranan: %s",
+                "looked_in": "Aranan konum:",
+                "and_more": "... ve %d tane daha",
+                "play_again": "Önce Oyunu Oyna'yı bir kez daha deneyin: yeni kurulmuş bir klasör bazen hâlâ taranıyor olabilir. Hata sürerse oyun klasörünün kopyalanması tamamlanmamış olabilir.",
                 "yes": "Evet", "no": "Hayır", "cancel": "İptal"
             },
             "Ukrainian": {
@@ -9021,6 +13258,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Відкриває інструмент для модів з цього диска.",
                 "tip_steam": "Додає гру до вашої бібліотеки Steam, щоб запускати її звідти.",
                 "tip_uninstall": "Видаляє встановлену гру. Ваші збереження не зачіпаються.",
+                "choose_game": "Виберіть гру", "sort_disc": "Як на диску", "sort_az": "Від А до Я",
+                "tip_star": "Позначте гру зірочкою, і вона з'явиться вгорі головного меню.",
+                "play_games": "Грати", "steam": "Додати до Steam",
+                "ok": "OK",
+                "steam_none_title": "Нічого додати",
+                "steam_none": "Не знайдено жодної гри для додавання до вашої бібліотеки Steam.",
+                "steam_none_detail": "Спочатку встановіть гру з диска, а потім спробуйте ще раз.",
+                "steam_missing_title": "Steam не знайдено",
+                "steam_missing": "На цьому комп'ютері не знайдено профілю Steam.",
+                "steam_missing_detail": "Встановіть Steam і увійдіть хоча б один раз, а потім спробуйте ще раз. Steam створює потрібну теку лише після першого входу.",
+                "steam_running_title": "Спочатку закрийте Steam",
+                "steam_running": "Steam запущено, тому поки що нічого не додано.",
+                "steam_running_why": "Steam скасував би зміни: він зберігає список сторонніх ігор у пам'яті й під час закриття записує цю копію назад.",
+                "steam_running_detail": "Повністю закрийте Steam: клацніть правою кнопкою миші значок Steam в області сповіщень біля годинника й виберіть Вихід. Закрити вікно недостатньо. Потім знову натисніть «Додати до Steam».",
+                "steam_added_title": "Додано до Steam",
+                "steam_added": "%s тепер у вашій бібліотеці Steam, серед сторонніх ігор.",
+                "steam_added_detail": "Гра з'явиться там під час наступного запуску Steam.",
+                "steam_already_title": "Уже в Steam",
+                "steam_already": "%s уже є у вашій бібліотеці Steam.",
+                "steam_already_detail": "Нічого не змінено. Якщо хочете додати гру знову, спочатку видаліть її зі Steam.",
+                "steam_failed_title": "Не вдалося додати до Steam",
+                "steam_blocked": "Не вдалося оновити список сторонніх ігор у Steam.",
+                "steam_blocked_detail": "Повністю закрийте Steam і спробуйте ще раз. Нічого не змінено, попередній список не зачеплено.",
+                "steam_unread": "Не вдалося прочитати список сторонніх ігор у Steam.",
+                "steam_unread_detail": "Повністю закрийте Steam і спробуйте ще раз.",
+                "uninstaller_detail": "Натомість видаліть гру в Windows через Параметри, Програми.",
+                "bonus_detail": "Цей диск створено без теки з бонусами.",
+                "mods_detail": "У теці mods на цьому диску не знайдено інструмента для модів.",
+                "looked_for": "Шукали: %s",
+                "looked_in": "Де шукали:",
+                "and_more": "... і ще %d",
+                "play_again": "Спочатку спробуйте ще раз натиснути «Грати»: щойно встановлену теку іноді ще перевіряють. Якщо помилка повторюється, можливо, теку гри скопійовано не повністю.",
                 "yes": "Так", "no": "Ні", "cancel": "Скасувати"
             },
             "Vietnamese": {
@@ -9038,6 +13307,38 @@ class GameMenu(QtWidgets.QWidget):
                 "tip_mods": "Mở công cụ mod có trên đĩa này.",
                 "tip_steam": "Thêm trò chơi vào thư viện Steam của bạn để khởi chạy từ đó.",
                 "tip_uninstall": "Gỡ trò chơi đã cài đặt. Các tệp lưu của bạn không bị đụng đến.",
+                "choose_game": "Chọn trò chơi của bạn", "sort_disc": "Theo thứ tự trên đĩa", "sort_az": "Từ A đến Z",
+                "tip_star": "Gắn sao cho trò chơi để nó hiện ở đầu menu chính.",
+                "play_games": "Chơi Game", "steam": "Thêm vào Steam",
+                "ok": "OK",
+                "steam_none_title": "Không có gì để thêm",
+                "steam_none": "Không tìm thấy trò chơi nào để thêm vào thư viện Steam của bạn.",
+                "steam_none_detail": "Hãy cài đặt trò chơi từ đĩa trước, rồi thử lại.",
+                "steam_missing_title": "Không tìm thấy Steam",
+                "steam_missing": "Không tìm thấy hồ sơ Steam nào trên máy tính này.",
+                "steam_missing_detail": "Hãy cài đặt Steam và đăng nhập một lần, rồi thử lại. Steam chỉ tạo thư mục cần thiết sau lần đăng nhập đầu tiên.",
+                "steam_running_title": "Hãy thoát Steam trước",
+                "steam_running": "Steam đang chạy, nên chưa có gì được thêm.",
+                "steam_running_why": "Steam sẽ hoàn tác thay đổi: Steam giữ danh sách trò chơi không thuộc Steam trong bộ nhớ và ghi lại bản sao đó khi đóng.",
+                "steam_running_detail": "Hãy thoát hẳn Steam: nhấp chuột phải vào biểu tượng Steam trong vùng thông báo, cạnh đồng hồ, rồi chọn Thoát. Chỉ đóng cửa sổ là chưa đủ. Sau đó nhấn lại Thêm vào Steam.",
+                "steam_added_title": "Đã thêm vào Steam",
+                "steam_added": "%s hiện đã có trong thư viện Steam của bạn, trong mục trò chơi không thuộc Steam.",
+                "steam_added_detail": "Trò chơi sẽ xuất hiện ở đó vào lần tới bạn khởi động Steam.",
+                "steam_already_title": "Đã có trong Steam",
+                "steam_already": "%s đã có sẵn trong thư viện Steam của bạn.",
+                "steam_already_detail": "Không có gì thay đổi. Hãy gỡ trò chơi khỏi Steam trước nếu bạn muốn thêm lại.",
+                "steam_failed_title": "Không thể thêm vào Steam",
+                "steam_blocked": "Không thể cập nhật danh sách trò chơi không thuộc Steam của Steam.",
+                "steam_blocked_detail": "Hãy đóng hẳn Steam rồi thử lại. Không có gì thay đổi và danh sách trước đó vẫn nguyên vẹn.",
+                "steam_unread": "Không thể đọc danh sách trò chơi không thuộc Steam của Steam.",
+                "steam_unread_detail": "Hãy đóng hẳn Steam rồi thử lại.",
+                "uninstaller_detail": "Thay vào đó, hãy gỡ cài đặt trò chơi trong Cài đặt, Ứng dụng của Windows.",
+                "bonus_detail": "Đĩa này được tạo mà không có thư mục bonus.",
+                "mods_detail": "Không tìm thấy công cụ mod nào trong thư mục mods trên đĩa này.",
+                "looked_for": "Đã tìm: %s",
+                "looked_in": "Đã tìm trong:",
+                "and_more": "... và %d mục khác",
+                "play_again": "Hãy thử nhấn Chơi Game thêm một lần trước: thư mục vừa cài đặt đôi khi vẫn đang được quét. Nếu vẫn tiếp tục lỗi, có thể thư mục trò chơi chưa sao chép xong.",
                 "yes": "Có", "no": "Không", "cancel": "Hủy"
             }
         }
@@ -9061,6 +13362,10 @@ class GameMenu(QtWidgets.QWidget):
         self.current_lang = (
             _configured_lang if _configured_lang in self.translations else "English"
         )
+        # The language this player picked last time, on this PC, wins over the
+        # disc's own (1.5.1): a player should not have to pick it every time.
+        if self.player_prefs.get("lang") in self.translations:
+            self.current_lang = self.player_prefs["lang"]
         self.init_ui()
     
     def init_ui(self):
@@ -9166,6 +13471,7 @@ class GameMenu(QtWidgets.QWidget):
         left_layout.setContentsMargins(int(40 * self.scale_factor), int(50 * self.scale_factor), int(50 * self.scale_factor), int(50 * self.scale_factor))
         left_layout.setSpacing(0)
         
+        title_label = None  # a text title is fitted to the column once it is built: _fit_title
         # Game title or logo
         logo_path = None
         
@@ -9210,7 +13516,7 @@ class GameMenu(QtWidgets.QWidget):
                     max_height = int(120 * self.scale_factor)  # Base size
                     
                     # If square, increase size by 2x
-                    if is_square:
+                    if is_square and len(self.games) < 2:
                         max_width *= 2
                         max_height *= 2
                     
@@ -9237,6 +13543,7 @@ class GameMenu(QtWidgets.QWidget):
                 pass
                 # Fallback to text
                 title_label = QtWidgets.QLabel(self.menu_title.upper())
+                title_label.setTextFormat(QtCore.Qt.PlainText)
                 title_label.setStyleSheet("""
                     color: white;
                     font-size: """ + str(int(36 * self.scale_factor)) + """px;
@@ -9246,10 +13553,12 @@ class GameMenu(QtWidgets.QWidget):
                     background: transparent;
                 """)
                 title_label.setWordWrap(True)
+                self._keep_title_whole(title_label)
                 left_layout.addWidget(title_label)
         else:
             # No logo found, use text
             title_label = QtWidgets.QLabel(self.menu_title.upper())
+            title_label.setTextFormat(QtCore.Qt.PlainText)
             title_label.setStyleSheet("""
                 color: white;
                 font-size: """ + str(int(36 * self.scale_factor)) + """px;
@@ -9259,6 +13568,7 @@ class GameMenu(QtWidgets.QWidget):
                 background: transparent;
             """)
             title_label.setWordWrap(True)
+            self._keep_title_whole(title_label)
             left_layout.addWidget(title_label)
         
         # Add some spacing
@@ -9278,7 +13588,7 @@ class GameMenu(QtWidgets.QWidget):
                 letter-spacing: """ + str(int(2 * self.scale_factor)) + """px;
                 margin: """ + str(int(5 * self.scale_factor)) + """px 0px;
             }}
-            QPushButton:hover {{
+            QPushButton:hover, QPushButton:focus {{
                 color: white;
                 border-left: """ + str(int(4 * self.scale_factor)) + """px solid #ffffff;
                 background-color: rgba(255, 255, 255, 10);
@@ -9292,11 +13602,12 @@ class GameMenu(QtWidgets.QWidget):
         
         # Create menu buttons with neutral colors. On an install-first disc the
         # game lives inside setup.exe, so the top button installs rather than
-        # promising a launch that cannot happen.
+        # promising a launch that cannot happen. Every label starts in the menu's
+        # language: they used to start in English, so a disc set to another
+        # language (or a player's remembered one) opened half translated.
         self.installer_path = self.disc_installer()
         trans = self.translations[self.current_lang]
-        self.play_btn = QtWidgets.QPushButton(
-            trans["install"].upper() if self.installer_path else "PLAY GAME")
+        self.play_btn = QtWidgets.QPushButton(self.play_label(trans))
         self.play_btn.clicked.connect(
             self.run_disc_installer if self.installer_path else self.launch_game)
         if self.installer_path:
@@ -9325,7 +13636,7 @@ class GameMenu(QtWidgets.QWidget):
                 letter-spacing: """ + str(int(1 * self.scale_factor)) + """px;
                 margin: 0px 0px """ + str(int(10 * self.scale_factor)) + """px 0px;
             }
-            QPushButton:hover {
+            QPushButton:hover, QPushButton:focus {
                 color: #ffffff;
                 padding-left: """ + str(int(40 * self.scale_factor)) + """px;
             }
@@ -9342,6 +13653,34 @@ class GameMenu(QtWidgets.QWidget):
             self.compat_btn.setToolTip(self.compatibility_hint())
             self.compat_btn.setStyleSheet(compat_style)
 
+        # Every game under PLAY GAMES (1.5.1, B9): quiet lines like compatibility
+        # mode, one per game, starred ones first, each starting its game. Only on
+        # a disc of several games that is already installed. A long list scrolls
+        # inside its own box, so UNINSTALL and EXIT never leave the window.
+        self.quick_style = compat_style
+        self.quick_btns = []
+        self.quick_box = QtWidgets.QWidget()
+        self.quick_box.setStyleSheet("background: transparent;")
+        self.quick_layout = QtWidgets.QVBoxLayout(self.quick_box)
+        self.quick_layout.setContentsMargins(0, 0, 0, 0)
+        self.quick_layout.setSpacing(0)
+        self.quick_scroll = QtWidgets.QScrollArea()
+        self.quick_scroll.setWidget(self.quick_box)
+        self.quick_scroll.setWidgetResizable(True)
+        self.quick_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.quick_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.quick_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.quick_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.quick_scroll.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        self.quick_scroll.setStyleSheet("""
+            QWidget { background: transparent; border: none; }
+            QScrollBar:vertical { background: transparent; width: """ + str(int(6 * self.scale_factor)) + """px; margin: 0px; }
+            QScrollBar::handle:vertical { background: rgba(255, 255, 255, 60); min-height: """ + str(int(24 * self.scale_factor)) + """px; }
+            QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 120); }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+        """)
+
         # Only show bonus button if bonus folder exists
         bonus_exists = False
         bonus_paths = [
@@ -9355,7 +13694,7 @@ class GameMenu(QtWidgets.QWidget):
                 break
         
         if bonus_exists:
-            self.bonus_btn = QtWidgets.QPushButton("BONUS CONTENT")
+            self.bonus_btn = QtWidgets.QPushButton(self.shout(trans["bonus"]))
             self.bonus_btn.clicked.connect(self.open_bonus)
             self.bonus_btn.setCursor(QtCore.Qt.PointingHandCursor)
             self.bonus_btn.setToolTip(self.translations[self.current_lang]["tip_bonus"])
@@ -9380,13 +13719,13 @@ class GameMenu(QtWidgets.QWidget):
         # ADD TO STEAM: only offered once the game is actually installed
         self.steam_btn = None
         if self.menu_config.get("steam_button") and os.path.exists(os.path.join(self.game_dir, "unins000.exe")):
-            self.steam_btn = QtWidgets.QPushButton("Add to Steam")
+            self.steam_btn = QtWidgets.QPushButton(trans["steam"])
             self.steam_btn.clicked.connect(self.add_to_steam)
             self.steam_btn.setCursor(QtCore.Qt.PointingHandCursor)
             self.steam_btn.setToolTip(self.translations[self.current_lang]["tip_steam"])
             self.steam_btn.setStyleSheet(compat_style)
 
-        self.uninstall_btn = QtWidgets.QPushButton("UNINSTALL")
+        self.uninstall_btn = QtWidgets.QPushButton(self.shout(trans["uninstall"]))
         self.uninstall_btn.clicked.connect(self.uninstall_game)
         self.uninstall_btn.setCursor(QtCore.Qt.PointingHandCursor)
         # PLAY and EXIT get no tooltip: a tooltip that restates the button is
@@ -9397,7 +13736,7 @@ class GameMenu(QtWidgets.QWidget):
             color="#cccccc", border_width="3", border_color="transparent"
         ))
         
-        self.exit_btn = QtWidgets.QPushButton("EXIT")
+        self.exit_btn = QtWidgets.QPushButton(self.shout(trans["exit"]))
         self.exit_btn.clicked.connect(self.close)
         self.exit_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.exit_btn.setStyleSheet(button_style_template.format(
@@ -9411,6 +13750,7 @@ class GameMenu(QtWidgets.QWidget):
         buttons_to_add = [self.play_btn]
         if self.compat_btn is not None:
             buttons_to_add.append(self.compat_btn)
+        buttons_to_add.append(self.quick_scroll)
         if mods_exists:
             buttons_to_add.append(self.mods_btn)
         if self.steam_btn is not None:
@@ -9421,6 +13761,9 @@ class GameMenu(QtWidgets.QWidget):
         
         for btn in buttons_to_add:
             left_layout.addWidget(btn)
+        self.refresh_quick_starts()  # after quick_scroll has its place, never as a window of its own
+        for btn in self.nav_buttons():
+            btn.installEventFilter(self)  # Up and Down follow the screen; see eventFilter
         
         left_layout.addStretch()
         
@@ -9496,6 +13839,8 @@ class GameMenu(QtWidgets.QWidget):
         self.lang_combo.setFocusPolicy(QtCore.Qt.NoFocus)
         
         left_layout.addWidget(lang_container)
+        if title_label is not None:
+            self._fit_title(title_label, left_layout, scaled_height)
         
         main_layout.addWidget(left_panel)
         main_layout.addStretch()
@@ -9625,6 +13970,9 @@ class GameMenu(QtWidgets.QWidget):
             # Show copyright only if explicitly configured (no defaults)
             if copyright_text:
                 copyright_label = QtWidgets.QLabel(copyright_text, ui_container)
+                # Plain text: menu_config.json can be rewritten, and markup in a
+                # label can make the signed menu fetch a file (security review).
+                copyright_label.setTextFormat(QtCore.Qt.PlainText)
                 copyright_label.setStyleSheet("""
                     color: #666666;
                     font-size: """ + str(int(10 * self.scale_factor)) + """px;
@@ -9641,14 +13989,74 @@ class GameMenu(QtWidgets.QWidget):
         # Initialize controller support
         self.init_controller_support()
     
+    def _keep_title_whole(self, label):
+        """A text title claims the height of every line it wraps to.
+
+        The games under PLAY GAMES take room in the column, and the layout took
+        it from the title, which lost its last line: a cut that reads as another
+        name. Measured after the style sheet is applied, or the font is wrong.
+        """
+        label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        label.ensurePolished()
+        label.setMinimumHeight(label.heightForWidth(int(390 * self.scale_factor)))
+
+    def _fit_title(self, label, layout, room):
+        """Fit a text title to the column, which never grows: the window has one size.
+
+        Claiming every line was not enough on its own. With Mods, Add to Steam and
+        Bonus as well, a title of three or four lines and the buttons were taller
+        than the column, and the layout put PLAY GAMES on top of the title's last
+        line. The type steps down instead, to 22 px at most, measured with the
+        layout's own minimum; past that the title is cut, never overlapped.
+        """
+        size = int(36 * self.scale_factor)
+        floor = int(22 * self.scale_factor)
+        step = max(1, int(2 * self.scale_factor))
+
+        def over():
+            layout.invalidate()
+            return layout.minimumSize().height() - room
+
+        while over() > 0 and size - step >= floor:
+            old = "font-size: %dpx" % size
+            size -= step
+            label.setStyleSheet(label.styleSheet().replace(old, "font-size: %dpx" % size))
+            self._keep_title_whole(label)
+        excess = over()
+        if excess > 0:
+            label.setMinimumHeight(max(0, label.minimumHeight() - excess))
+
+    def shout(self, text):
+        """A label in capitals, as the menu's language writes them: a Turkish i
+        keeps its dot (SEÇİN, never SEÇIN), and Greek capitals drop their accents."""
+        if self.current_lang == "Turkish":
+            text = text.replace("i", "İ")
+        text = text.upper()
+        if self.current_lang == "Greek":
+            text = unicodedata.normalize("NFC", "".join(
+                c for c in unicodedata.normalize("NFD", text) if c != chr(0x301)))
+        return text
+
+    def play_label(self, trans):
+        """The top button's words: Install on an install-first disc, Play Games
+        on a disc of several games (it opens the Choose Your Game page), else
+        Play Game."""
+        if getattr(self, "installer_path", ""):
+            return self.shout(trans["install"])
+        if len(self.games) > 1:
+            return self.shout(trans["play_games"])
+        return self.shout(trans["play"])
+
     def change_language(self, lang):
         self.current_lang = lang
         trans = self.translations[lang]
-        
-        # Update UI text - keep label text as "Menu Language:" 
-        self.play_btn.setText(
-            trans["install"].upper() if getattr(self, "installer_path", "")
-            else trans["play"].upper())
+        # Remembered on this PC, so the menu opens in it next time.
+        self.player_prefs["lang"] = lang
+        self.keep_player_prefs()
+
+        # Update UI text - keep label text as "Menu Language:", so a player who
+        # picked a language they cannot read can still find the way back.
+        self.play_btn.setText(self.play_label(trans))
         if getattr(self, "installer_path", ""):
             self.play_btn.setToolTip(trans["tip_install"])
         # compatibility_label() and compatibility_hint() re-read the author's
@@ -9658,16 +14066,17 @@ class GameMenu(QtWidgets.QWidget):
             self.compat_btn.setText(self.compatibility_label())
             self.compat_btn.setToolTip(self.compatibility_hint())
         if hasattr(self, 'bonus_btn'):
-            self.bonus_btn.setText(trans["bonus"].upper())
+            self.bonus_btn.setText(self.shout(trans["bonus"]))
             self.bonus_btn.setToolTip(trans["tip_bonus"])
         if hasattr(self, 'mods_btn'):
             self.mods_btn.setText(trans["mods"])
             self.mods_btn.setToolTip(trans["tip_mods"])
         if getattr(self, 'steam_btn', None) is not None:
+            self.steam_btn.setText(trans["steam"])
             self.steam_btn.setToolTip(trans["tip_steam"])
-        self.uninstall_btn.setText(trans["uninstall"].upper())
+        self.uninstall_btn.setText(self.shout(trans["uninstall"]))
         self.uninstall_btn.setToolTip(trans["tip_uninstall"])
-        self.exit_btn.setText(trans["exit"].upper())
+        self.exit_btn.setText(self.shout(trans["exit"]))
     
     # --- ADD TO STEAM (adds installed game to the Steam library) ---
 
@@ -9941,20 +14350,14 @@ class GameMenu(QtWidgets.QWidget):
         if self.preview_mode:
             self.show_preview_notice()
             return
+        trans = self.translations[self.current_lang]
         games = self._steam_game_list()
         if not games:
-            self._menu_message(
-                "Nothing to add",
-                "No game was found to put in your Steam library.",
-                "Install the game from the disc first, then try again.")
+            self._menu_message(trans["steam_none_title"], trans["steam_none"], trans["steam_none_detail"])
             return
         shortcut_files = self._steam_shortcuts_paths()
         if not shortcut_files:
-            self._menu_message(
-                "Steam not found",
-                "No Steam profile was found on this PC.",
-                "Install Steam and sign in once, then try again. Steam only creates "
-                "the folder this needs after the first sign-in.")
+            self._menu_message(trans["steam_missing_title"], trans["steam_missing"], trans["steam_missing_detail"])
             return
 
         # Nothing is written while Steam is up. Steam holds this list in memory
@@ -9966,13 +14369,8 @@ class GameMenu(QtWidgets.QWidget):
         # keeps running in the notification area.
         if self._steam_is_running():
             self._menu_message(
-                "Exit Steam first",
-                "Steam is running, so nothing has been added yet.",
-                "Steam would undo it: it keeps its list of non-Steam games in "
-                "memory and writes that copy back out when it closes.\\n\\n"
-                "Exit Steam completely - right-click the Steam icon in the "
-                "notification area, by the clock, and choose Exit. Closing the "
-                "window is not enough. Then press ADD TO STEAM again.")
+                trans["steam_running_title"], trans["steam_running"],
+                trans["steam_running_why"] + "\\n\\n" + trans["steam_running_detail"])
             return
 
         icon = os.path.join(self.game_dir, "game_icon.ico")
@@ -10052,33 +14450,17 @@ class GameMenu(QtWidgets.QWidget):
         if added_names:
             # Steam cannot be running here - the guard above returned already -
             # so there is no "restart Steam" case left to describe.
-            detail = "It will be there the next time you start Steam."
-            self._menu_message(
-                "Added to Steam",
-                "%s is in your Steam library now, under non-Steam games."
-                % ", ".join(added_names),
-                detail)
+            self._menu_message(trans["steam_added_title"], trans["steam_added"] % ", ".join(added_names),
+                               trans["steam_added_detail"])
         elif already_there:
-            self._menu_message(
-                "Already in Steam",
-                "%s is already in your Steam library." % ", ".join(already_there),
-                "Nothing was changed. Remove it from Steam first if you want to add it again.")
+            self._menu_message(trans["steam_already_title"], trans["steam_already"] % ", ".join(already_there),
+                               trans["steam_already_detail"])
         elif blocked:
-            self._menu_message(
-                "Could not add to Steam",
-                "Steam's list of non-Steam games could not be updated.",
-                "Close Steam completely and try again. Nothing was changed, and the "
-                "previous list is untouched.")
+            self._menu_message(trans["steam_failed_title"], trans["steam_blocked"], trans["steam_blocked_detail"])
         elif reached_any:
-            self._menu_message(
-                "Nothing to add",
-                "No game was found to put in your Steam library.",
-                "Install the game from the disc first, then try again.")
+            self._menu_message(trans["steam_none_title"], trans["steam_none"], trans["steam_none_detail"])
         else:
-            self._menu_message(
-                "Could not add to Steam",
-                "Steam's list of non-Steam games could not be read.",
-                "Close Steam completely and try again.")
+            self._menu_message(trans["steam_failed_title"], trans["steam_unread"], trans["steam_unread_detail"])
 
     # Every popup the menu shows goes through these three. They were being
     # called from fourteen places and defined in none: PLAY with no exe, BONUS
@@ -10145,6 +14527,7 @@ class GameMenu(QtWidgets.QWidget):
         box = QtWidgets.QMessageBox(self)
         box.setIcon(icon)
         box.setWindowTitle(title)
+        box.setTextFormat(QtCore.Qt.PlainText)  # "Looked for:" quotes the config
         box.setText(body)
         if detail:
             box.setInformativeText(detail)
@@ -10156,8 +14539,11 @@ class GameMenu(QtWidgets.QWidget):
         return box
 
     def _menu_message(self, title, body, detail=""):
-        """Say what happened, and underneath it what to do about it."""
-        self._message_box(QtWidgets.QMessageBox.Information, title, body, detail).exec_()
+        """Say what happened, and underneath it what to do about it. The OK
+        button is the menu's own: Qt's stock one says OK in every language."""
+        box = self._message_box(QtWidgets.QMessageBox.Information, title, body, detail)
+        box.addButton(self.translations[self.current_lang]["ok"], QtWidgets.QMessageBox.AcceptRole)
+        box.exec_()
 
     def _menu_confirm(self, title, body, detail=""):
         """Ask a yes/no question in the player's own language. True means yes.
@@ -10190,16 +14576,145 @@ class GameMenu(QtWidgets.QWidget):
             QtWidgets.QApplication.instance().quit()
         else:
             trans = self.translations[self.current_lang]
-            self._menu_message(trans["error"], trans["game_not_found"],
-                               "Looked for: %s" % rel_exe)
+            self._menu_message(trans["error"], trans["game_not_found"], trans["looked_for"] % rel_exe)
+
+    def nav_buttons(self):
+        """The menu's buttons top to bottom, as the screen shows them.
+
+        For the arrow keys and a controller. Two hand-kept lists used to do
+        this, and both had drifted from the screen: Compatibility Mode was in
+        neither, and Bonus came before Mods.
+        """
+        order = [self.play_btn, getattr(self, "compat_btn", None)]
+        order += list(getattr(self, "quick_btns", []))
+        order += [getattr(self, "mods_btn", None), getattr(self, "steam_btn", None),
+                  getattr(self, "bonus_btn", None), self.uninstall_btn, self.exit_btn]
+        return [b for b in order if b is not None]
+
+    def game_label(self, game):
+        """A game's name as the author gave it, else its exe's name."""
+        raw = str(game.get("name") or os.path.splitext(os.path.basename(str(game.get("exe") or "")))[0])
+        return "".join(c if c >= " " else " " for c in raw).strip()[:80] or "Game"
+
+    def game_blurb(self, game):
+        """The author's one line about a game, for the Play page."""
+        raw = str(game.get("blurb") or "")
+        return "".join(c if c >= " " else " " for c in raw).strip()[:140]
+
+    def game_picture(self, game):
+        """The game's picture on the Play page.
+
+        The author's image when it is a picture inside the install folder
+        (menu_config.json can be rewritten, so the path is held to the same
+        containment as an exe), else the exe's own icon.
+        """
+        rel = str(game.get("icon") or "").strip()
+        if rel and not os.path.isabs(rel) and rel.lower().endswith((".ico", ".png", ".jpg", ".jpeg", ".bmp")):
+            path = os.path.normpath(os.path.join(self.game_dir, rel))
+            try:
+                fits = os.path.isfile(path) and os.path.getsize(path) <= 8 * 1024 * 1024
+            except OSError:
+                fits = False
+            if fits and self._inside_game_dir(path):
+                pixmap = QtGui.QPixmap(path)
+                if not pixmap.isNull():
+                    return QtGui.QIcon(pixmap)
+        exe = self._configured_exe(game.get("exe"))
+        if exe:
+            return QtWidgets.QFileIconProvider().icon(QtCore.QFileInfo(exe))
+        return QtGui.QIcon()
+
+    def keep_player_prefs(self):
+        # A preview runs on the author's own PC: what they click there is not a
+        # player's choice, so it lasts only as long as the preview.
+        if not self.preview_mode:
+            write_player_prefs(MENU_TITLE, self.player_prefs)
+
+    def listed_games(self):
+        """Every game, for the lines under PLAY GAMES: the starred ones first,
+        then the rest, each group A to Z."""
+        if len(self.games) < 2 or getattr(self, "installer_path", ""):
+            return []
+        stars = self.player_prefs.get("stars", [])
+        return sorted(self.games, key=lambda g: (g["exe"] not in stars, self.game_label(g).casefold()))
+
+    def start_one_game(self, exe, args=None):
+        if self.preview_mode:
+            self.show_preview_notice()
+        else:
+            self.launch_configured_exe(exe, args)
+
+    def refresh_quick_starts(self):
+        """Rebuild the lines under PLAY GAMES: every game, starred ones first."""
+        layout = getattr(self, "quick_layout", None)
+        if layout is None:
+            return
+        for btn in self.quick_btns:
+            layout.removeWidget(btn)
+            btn.deleteLater()
+        self.quick_btns = []
+        stars = self.player_prefs.get("stars", [])
+        # The line's room inside the menu column, less the indent it slides to
+        # on hover: a longer name ends in an ellipsis and shows whole as a tooltip.
+        # The star follows the name, so every name starts at the same place.
+        room = int(330 * self.scale_factor)
+        for game in self.listed_games():
+            name = self.game_label(game)
+            mark = "  ★" if game["exe"] in stars else ""
+            btn = QtWidgets.QPushButton()
+            btn.setCursor(QtCore.Qt.PointingHandCursor)
+            btn.setStyleSheet(self.quick_style)
+            btn.ensurePolished()
+            metrics = btn.fontMetrics()
+            shown = metrics.elidedText(name, QtCore.Qt.ElideRight, room - metrics.horizontalAdvance(mark))
+            btn.setText(shown + mark)
+            if shown != name:
+                btn.setToolTip(name)
+            btn.clicked.connect(lambda _checked=False, exe=game["exe"]: self.start_one_game(exe))
+            btn.installEventFilter(self)
+            layout.addWidget(btn)
+            # A line added to a menu already on screen is shown by Qt a moment
+            # later, and a hidden line measures as nothing: starring a game on the
+            # page squeezed the whole list to 1 px until the menu was started again.
+            btn.show()
+            self.quick_btns.append(btn)
+        # As tall as its lines where the column has room, and never shorter than
+        # two of them; past that the box scrolls. Summed from the lines themselves.
+        tall = sum(b.sizeHint().height() for b in self.quick_btns)
+        line = self.quick_btns[0].sizeHint().height() if self.quick_btns else 0
+        self.quick_scroll.setMaximumHeight(max(tall, 1))
+        self.quick_scroll.setMinimumHeight(min(tall, line * 2))
+        self.quick_scroll.setVisible(bool(self.quick_btns))
+        order = self.nav_buttons()
+        for first, second in zip(order, order[1:]):
+            QtWidgets.QWidget.setTabOrder(first, second)
+
+    def show_in_list(self, btn):
+        """Scroll a game's line into view when the keyboard or a controller reaches it."""
+        if btn in getattr(self, "quick_btns", []):
+            self.quick_scroll.ensureWidgetVisible(btn)
 
     def show_game_chooser(self, args=None):
-        # Multi-game disc: let the player pick which game to play. `args` rides
-        # along so a compatibility launch still asks which game first.
+        # A disc of several games (1.5.1, B9): the Play page. Each game with its
+        # picture, its name and the author's line about it, and a star that lifts
+        # it to the top here and under PLAY GAMES. As on the disc or A to Z, the
+        # player's choice, kept on this PC with the stars. `args` rides along so a
+        # compatibility launch still asks which game first.
         args = args or []
+        trans = self.translations[self.current_lang]
+        scale = self.scale_factor
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Choose Your Game")
-        dialog.setMinimumWidth(int(420 * self.scale_factor))
+        # No "?" in the title bar: Qt 5 gives every dialog Windows' context-help
+        # button, and nothing on this page answers it, so a click did nothing.
+        dialog.setWindowFlags(dialog.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
+        dialog.setWindowTitle(trans["choose_game"])
+        # Sized to the screen it opens on, not a fixed 560 (1.5.1, end-to-end runs): each game's name and
+        # line wrap inside its row, so every picture, name, line and star shows at any width.
+        handle = self.windowHandle()
+        screen = ((handle.screen() if handle is not None else None)
+                  or QtWidgets.QApplication.instance().primaryScreen()).availableGeometry()
+        widest = max(int(screen.width() * 0.9), 320)
+        dialog.setMinimumWidth(min(int(560 * scale), widest))
         icon_path = os.path.join(self.game_dir, "game_icon.ico")
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QtGui.QIcon(icon_path))
@@ -10207,38 +14722,235 @@ class GameMenu(QtWidgets.QWidget):
         dialog.setStyleSheet("""
             QDialog { background-color: #1a1a1a; }
             QLabel { color: #ffffff; background: transparent; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
             QPushButton {
                 background-color: rgba(40, 40, 40, 200);
                 color: #ffffff;
                 border: 2px solid rgba(255, 255, 255, 40);
-                padding: 14px 20px;
+                padding: 12px 18px;
                 font-size: 15px;
                 font-weight: bold;
-                letter-spacing: 2px;
+                letter-spacing: 1px;
                 text-align: left;
             }
             QPushButton:hover { border-color: #ffffff; background-color: rgba(60, 60, 60, 220); }
+            QFrame#gameRow { background-color: rgba(40, 40, 40, 200); border: 2px solid rgba(255, 255, 255, 40); }
+            QFrame#gameRow:hover, QFrame#gameRow:focus {
+                border-color: #ffffff; background-color: rgba(60, 60, 60, 220);
+            }
+            QLabel#gameName { font-size: 15px; font-weight: bold; letter-spacing: 1px; }
+            QLabel#gameLine { font-size: 13px; color: #cccccc; }
+            QPushButton#star { font-size: 20px; padding: 8px 14px; text-align: center; color: #888888; }
+            QPushButton#star[starred="true"] { color: #ffd54a; }
+            QPushButton#star:focus { border-color: #ffffff; }
+            QPushButton#sort {
+                font-size: 11px; padding: 6px 10px; text-align: center;
+                color: #888888; border: 1px solid rgba(255, 255, 255, 20);
+            }
+            QPushButton#sort:checked { color: #ffffff; border-color: rgba(255, 255, 255, 120); }
         """)
         layout = QtWidgets.QVBoxLayout(dialog)
         layout.setSpacing(10)
         layout.setContentsMargins(24, 24, 24, 24)
-        title = QtWidgets.QLabel("CHOOSE YOUR GAME")
+
+        head = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel(self.shout(trans["choose_game"]))
         title.setStyleSheet("font-size: 13px; font-weight: bold; letter-spacing: 4px; color: #aaaaaa;")
-        layout.addWidget(title)
-        for game in self.games:
-            label = game.get("name") or os.path.splitext(os.path.basename(game["exe"]))[0]
-            btn = QtWidgets.QPushButton("  " + label.upper())
+        head.addWidget(title)
+        head.addStretch()
+        sort_buttons = {}
+        for key in ("disc", "az"):
+            btn = QtWidgets.QPushButton(trans["sort_" + key])
+            btn.setObjectName("sort")
+            btn.setCheckable(True)
             btn.setCursor(QtCore.Qt.PointingHandCursor)
-            def make_handler(exe):
-                def handler():
-                    dialog.accept()
-                    if self.preview_mode:
-                        self.show_preview_notice()
-                    else:
-                        self.launch_configured_exe(exe, args)
-                return handler
-            btn.clicked.connect(make_handler(game["exe"]))
-            layout.addWidget(btn)
+            btn.clicked.connect(lambda _checked=False, k=key: set_sort(k))
+            sort_buttons[key] = btn
+            head.addWidget(btn)
+        layout.addLayout(head)
+
+        rows = QtWidgets.QWidget()
+        rows_layout = QtWidgets.QVBoxLayout(rows)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(8)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setFocusPolicy(QtCore.Qt.NoFocus)  # no stop of its own between the rows and the sort buttons
+        scroll.setWidget(rows)
+        layout.addWidget(scroll)
+
+        hint = QtWidgets.QLabel(trans["tip_star"])
+        hint.setStyleSheet("font-size: 11px; color: #888888;")
+        layout.addWidget(hint)
+
+        def ordered():
+            games = list(self.games)
+            if self.player_prefs.get("sort") == "az":
+                games.sort(key=lambda g: self.game_label(g).casefold())
+            # Starred games first, each group in the order chosen above.
+            stars = self.player_prefs.get("stars", [])
+            return sorted(games, key=lambda g: g["exe"] not in stars)
+
+        def make_play(exe):
+            def play():
+                dialog.accept()
+                self.start_one_game(exe, args)
+            return play
+
+        class GameRow(QtWidgets.QFrame):
+            """One game: its picture, its name and the author's line, each wrapped to the row's width.
+            Pressed like a button: a click, Enter or Space."""
+
+            def __init__(self, on_press):
+                super().__init__()
+                self.on_press = on_press
+                self.exe = None  # the game it starts, and its star: set by fill()
+                self.star = None
+                self.setObjectName("gameRow")
+                self.setFocusPolicy(QtCore.Qt.StrongFocus)
+                self.setCursor(QtCore.Qt.PointingHandCursor)
+                self.setAttribute(QtCore.Qt.WA_Hover, True)
+
+            def mouseReleaseEvent(self, event):
+                if event.button() == QtCore.Qt.LeftButton and self.rect().contains(event.pos()):
+                    self.on_press()
+                else:
+                    super().mouseReleaseEvent(event)
+
+            def keyPressEvent(self, event):
+                if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter, QtCore.Qt.Key_Space):
+                    self.on_press()
+                elif event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_Down):
+                    self.step(event.key() == QtCore.Qt.Key_Down)
+                elif event.key() == QtCore.Qt.Key_Right and getattr(self, "star", None) is not None:
+                    self.star.setFocus(QtCore.Qt.TabFocusReason)
+                else:
+                    super().keyPressEvent(event)
+
+            def step(self, down):
+                """Row to row, for the arrow keys and a pad. The star between two rows is for a
+                click, Tab or Right: stepping onto it made the next Enter star the game."""
+                ring = list(row_order)
+                i = ring.index(self) + (1 if down else -1) if self in ring else 0
+                if 0 <= i < len(ring):
+                    ring[i].setFocus(QtCore.Qt.TabFocusReason if down else QtCore.Qt.BacktabFocusReason)
+                    scroll.ensureWidgetVisible(ring[i])
+
+        def breakable(text):
+            # A long name with no space (Sky_Quest_Remastered) cannot wrap, and one such row would push
+            # every star off the page: a zero-width space after an underscore, a dot or a slash, and in
+            # any run of 16 letters, gives the line somewhere to break. Nothing visible changes.
+            out, run = [], 0
+            for ch in text:
+                out.append(ch)
+                if ch.isspace() or ch == "-":
+                    run = 0
+                    continue
+                run += 1
+                if ch in "_./" or run >= 16:
+                    out.append(chr(0x200B))
+                    run = 0
+            return "".join(out)
+
+        def words(text, name):
+            label = QtWidgets.QLabel(breakable(text))
+            label.setObjectName(name)
+            label.setTextFormat(QtCore.Qt.PlainText)
+            label.setWordWrap(True)
+            label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            return label
+
+        def fit_list():
+            # Every game in view up to two thirds of the screen; past that, the
+            # list scrolls rather than the page running off the bottom. Measured
+            # at the width the rows have, with their words wrapped.
+            width = scroll.viewport().width() if dialog.isVisible() else dialog.width() - 48
+            tall = rows.heightForWidth(width) if rows.hasHeightForWidth() else -1
+            scroll.setMinimumHeight(min(tall if tall > 0 else rows.sizeHint().height(), int(screen.height() * 0.66)))
+
+        row_order = []  # the rows as the page shows them
+        placed = {}  # a game's exe: its row and its star
+
+        def fill():
+            while rows_layout.count():
+                item = rows_layout.takeAt(0)
+                if item.widget() is not None:
+                    item.widget().deleteLater()
+            del row_order[:]
+            placed.clear()
+            stars = self.player_prefs.get("stars", [])
+            for game in ordered():
+                row = QtWidgets.QWidget()
+                line = QtWidgets.QHBoxLayout(row)
+                line.setContentsMargins(0, 0, 0, 0)
+                blurb = self.game_blurb(game)
+                play = GameRow(make_play(game["exe"]))
+                inside = QtWidgets.QHBoxLayout(play)
+                inside.setContentsMargins(16, 10, 16, 10)
+                inside.setSpacing(14)
+                side = int(40 * scale)
+                picture = QtWidgets.QLabel()
+                picture.setFixedSize(side, side)
+                picture.setPixmap(self.game_picture(game).pixmap(side, side))
+                picture.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+                inside.addWidget(picture, 0, QtCore.Qt.AlignTop)
+                text = QtWidgets.QVBoxLayout()
+                text.setSpacing(3)
+                text.addWidget(words(self.game_label(game).upper(), "gameName"))
+                if blurb:
+                    text.addWidget(words(blurb, "gameLine"))
+                inside.addLayout(text, 1)
+                starred = game["exe"] in stars
+                star = QtWidgets.QPushButton("★" if starred else "☆")
+                star.setObjectName("star")
+                star.setProperty("starred", "true" if starred else "false")
+                star.setCursor(QtCore.Qt.PointingHandCursor)
+                star.clicked.connect(lambda _checked=False, exe=game["exe"]: toggle_star(exe))
+                play.exe = star.exe = game["exe"]
+                play.star = star
+                star.row = play
+                row_order.append(play)
+                placed[game["exe"]] = (play, star)
+                line.addWidget(play, 1)
+                line.addWidget(star)
+                rows_layout.addWidget(row)
+            rows_layout.addStretch()
+            for key, btn in sort_buttons.items():
+                btn.setChecked(self.player_prefs.get("sort", "disc") == key)
+            fit_list()
+
+        def set_sort(key):
+            self.player_prefs["sort"] = key
+            self.keep_player_prefs()
+            fill()
+
+        def toggle_star(exe):
+            focus = dialog.focusWidget()
+            kept = getattr(focus, "exe", None) == exe and focus.objectName() in ("star", "gameRow")
+            on_star = kept and focus.objectName() == "star"
+            stars = [x for x in self.player_prefs.get("stars", []) if x != exe]
+            if exe not in self.player_prefs.get("stars", []):
+                stars.append(exe)
+            # Any number: a star lifts a game to the top of both lists.
+            self.player_prefs["stars"] = stars[-MAX_STARS:]
+            self.keep_player_prefs()
+            fill()
+            self.refresh_quick_starts()
+            # The keyboard or the pad keeps its place: on the same game, which may have moved.
+            if kept and exe in placed:
+                target = placed[exe][1] if on_star else placed[exe][0]
+                target.setFocus()
+                scroll.ensureWidgetVisible(target)
+
+        # Opened wide enough for a long line on one or two rows, never wider than the screen it is on.
+        dialog.resize(min(max(int(820 * scale), dialog.minimumWidth()), widest), dialog.height())
+        fill()
+        tall = dialog.layout().totalHeightForWidth(dialog.width()) if dialog.layout().hasHeightForWidth() else -1
+        dialog.resize(dialog.width(), min(tall if tall > 0 else dialog.sizeHint().height(), int(screen.height() * 0.9)))
+        if row_order:
+            row_order[0].setFocus()  # the first game, ready for Enter or a pad's A
         dialog.exec_()
 
     # Names that are never the game: installer plumbing, crash handlers,
@@ -10462,12 +15174,10 @@ class GameMenu(QtWidgets.QWidget):
         shown = searched[:6]
         detail = "\\n".join("    " + folder for folder in shown)
         if len(searched) > len(shown):
-            detail += "\\n    ... and %d more" % (len(searched) - len(shown))
+            detail += "\\n    " + trans["and_more"] % (len(searched) - len(shown))
         self._menu_message(
             trans["error"], trans["game_not_found"],
-            "Looked in:\\n%s\\n\\nTry Play once more first: a freshly installed folder is "
-            "sometimes still being scanned. If it keeps failing, the game folder "
-            "may not have finished copying." % detail)
+            trans["looked_in"] + "\\n" + detail + "\\n\\n" + trans["play_again"])
 
     def _lift_dark_logo(self, label, pixmap):
         """Put a soft light halo behind a logo that is too dark to read here.
@@ -10591,7 +15301,9 @@ class GameMenu(QtWidgets.QWidget):
         raw = str(self.menu_config.get("compat_hint") or "")
         raw = ''.join(c if (c >= ' ' and c != '\\x7f') else ' ' for c in raw).strip()
         if raw:
-            return raw[:200]
+            # A tooltip reads markup by itself, so angle brackets from the
+            # rewritable config are shown, never obeyed (1.5.1 security re-read).
+            return raw[:200].replace("<", "‹").replace(">", "›")
         return self.translations[self.current_lang]["tip_compat"]
 
     def launch_compatibility_mode(self):
@@ -10638,8 +15350,7 @@ class GameMenu(QtWidgets.QWidget):
             os.startfile(bonus_dir)
         else:
             trans = self.translations[self.current_lang]
-            self._menu_message(trans["warning"], trans["bonus_not_found"],
-                               "This disc was built without a bonus folder.")
+            self._menu_message(trans["warning"], trans["bonus_not_found"], trans["bonus_detail"])
 
     def _resolve_mods_dir(self):
         # The mods folder sits at the install root, shared by every game on the disc
@@ -10693,8 +15404,7 @@ class GameMenu(QtWidgets.QWidget):
             QtWidgets.QApplication.instance().quit()
         else:
             trans = self.translations[self.current_lang]
-            self._menu_message(trans["warning"], trans["mods_not_found"],
-                               "No mod tool was found in the mods folder on this disc.")
+            self._menu_message(trans["warning"], trans["mods_not_found"], trans["mods_detail"])
 
     def uninstall_game(self):
         if self.preview_mode:
@@ -10703,136 +15413,155 @@ class GameMenu(QtWidgets.QWidget):
         uninstaller = os.path.join(self.game_dir, "unins000.exe")
         if os.path.exists(uninstaller):
             trans = self.translations[self.current_lang]
-            if self._menu_confirm(trans["warning"], trans["confirm_uninstall"],
-                                  "The game files are removed. Your saves are not touched."):
+            if self._menu_confirm(trans["warning"], trans["confirm_uninstall"], trans["tip_uninstall"]):
                 subprocess.Popen([uninstaller])
                 QtWidgets.QApplication.instance().quit()
         else:
             trans = self.translations[self.current_lang]
-            self._menu_message(
-                trans["warning"], trans["uninstaller_not_found"],
-                "Uninstall the game from Windows Settings, Apps instead.")
+            self._menu_message(trans["warning"], trans["uninstaller_not_found"], trans["uninstaller_detail"])
     
     def init_controller_support(self):
-        """Initialize gamepad/controller support"""
-        # Initialize gamepad support
+        """A pad drives the menu as the keyboard does: see check_gamepad_input."""
         self.current_button_index = 0
-        self.controller_states = {}
-        self.gamepad_timer = QtCore.QTimer()
+        self.pad_held = 0
+        self.pad_slots = []
+        self.pad_scan_due = 0.0
+        self.pad_repeat = None
+        self.xinput = load_xinput()
+        self.gamepad_timer = QtCore.QTimer(self)
         self.gamepad_timer.timeout.connect(self.check_gamepad_input)
-        
-        # Try to initialize pygame for gamepad support
-        try:
-            import pygame
-            pygame.init()
-            pygame.joystick.init()
-            
-            controller_count = pygame.joystick.get_count()
-            
-            self.pygame_available = True
-            self.joysticks = []
-            
-            # Initialize all connected joysticks/controllers
-            for i in range(controller_count):
-                try:
-                    joystick = pygame.joystick.Joystick(i)
-                    joystick.init()
-                    self.joysticks.append(joystick)
-                    self.controller_states[i] = {
-                        'last_hat': (0, 0),
-                        'last_axis': 0,
-                        'last_buttons': [False] * joystick.get_numbuttons(),
-                        'nav_cooldown': 0
-                    }
-                except Exception:
-                    pass
-            
-            if self.joysticks:
-                self.gamepad_timer.start(16)  # ~60fps polling
+        if self.xinput is not None:
+            # A button already down as the menu opens (A, from a front end that started it) is not a
+            # press: it started a game, or setup.exe, nobody chose.
+            self.pad_held = self.read_pads()
+            self.gamepad_timer.start(25)
 
-        except ImportError:
-            self.pygame_available = False
-        except Exception:
-            self.pygame_available = False
-    
+    def read_pads(self):
+        """The buttons held on every connected pad, as one set of XInput bits, the left stick
+        counting as the D-pad. An empty slot is asked again only every two seconds: asking a
+        slot with no pad in it is slow."""
+        now = time.monotonic()
+        if now >= self.pad_scan_due:
+            slots, self.pad_scan_due = range(4), now + 2.0
+        else:
+            slots = list(self.pad_slots)
+        state = XInputState()
+        held, connected = 0, []
+        for slot in slots:
+            try:
+                if self.xinput(slot, ctypes.byref(state)) != 0:
+                    continue
+            except Exception:
+                continue
+            connected.append(slot)
+            pad = state.Gamepad
+            held |= pad.wButtons
+            for value, sign, bit in ((pad.sThumbLY, 1, PAD_UP), (pad.sThumbLY, -1, PAD_DOWN),
+                                     (pad.sThumbLX, -1, PAD_LEFT), (pad.sThumbLX, 1, PAD_RIGHT)):
+                mark = PAD_STICK_OFF if self.pad_held & bit else PAD_STICK
+                if value * sign > mark:
+                    held |= bit
+        self.pad_slots = connected
+        return held
+
     def check_gamepad_input(self):
-        """Check for gamepad/controller input"""
-        if not self.pygame_available or not self.joysticks:
+        """Read the pads every 25 ms and act on what was just pressed.
+
+        Every press is acted on a moment later, outside this timer. A press that opens the
+        Choose Your Game page or a message box starts that window's own loop, and a timer
+        still inside its own call never fires again: the pad went dead on the page. Only
+        while the player is looking at this menu: never behind a game or another window.
+        """
+        if self.xinput is None:
             return
-            
-        try:
-            import pygame
-            pygame.event.pump()
-            
-            # Get list of buttons for navigation
-            buttons = [self.play_btn]
-            if hasattr(self, 'bonus_btn'):
-                buttons.append(self.bonus_btn)
-            if hasattr(self, 'mods_btn'):
-                buttons.append(self.mods_btn)
-            if getattr(self, 'steam_btn', None) is not None:
-                buttons.append(self.steam_btn)
-            buttons.extend([self.uninstall_btn, self.exit_btn])
-            
-            for i, joystick in enumerate(self.joysticks):
-                if i not in self.controller_states:
-                    continue
-                    
-                state = self.controller_states[i]
-                
-                # Reduce cooldown
-                if state['nav_cooldown'] > 0:
-                    state['nav_cooldown'] -= 1
-                    continue
-                
-                # D-pad navigation (hat 0)
-                if joystick.get_numhats() > 0:
-                    hat = joystick.get_hat(0)
-                    if hat != state['last_hat']:
-                        if hat[1] == 1:  # D-pad up
-                            self.navigate_up(buttons)
-                            state['nav_cooldown'] = 10  # Cooldown frames
-                        elif hat[1] == -1:  # D-pad down
-                            self.navigate_down(buttons)
-                            state['nav_cooldown'] = 10
-                        state['last_hat'] = hat
-                
-                # Left analog stick (Y-axis for up/down)
-                if joystick.get_numaxes() >= 2:
-                    y_axis = joystick.get_axis(1)
-                    current_direction = 0
-                    
-                    if y_axis < -0.5:  # Up
-                        current_direction = -1
-                    elif y_axis > 0.5:  # Down
-                        current_direction = 1
-                    
-                    if current_direction != state['last_axis'] and current_direction != 0:
-                        if current_direction == -1:
-                            self.navigate_up(buttons)
-                        elif current_direction == 1:
-                            self.navigate_down(buttons)
-                        state['nav_cooldown'] = 15  # Longer cooldown for analog
-                    
-                    state['last_axis'] = current_direction
-                
-                # Button presses
-                for btn_idx in range(min(joystick.get_numbuttons(), len(state['last_buttons']))):
-                    current_pressed = joystick.get_button(btn_idx)
-                    was_pressed = state['last_buttons'][btn_idx]
-                    
-                    # Button just pressed (rising edge)
-                    if current_pressed and not was_pressed:
-                        if btn_idx == 0:  # A/X button - activate
-                            if 0 <= self.current_button_index < len(buttons):
-                                buttons[self.current_button_index].click()
-                        elif btn_idx == 1:  # B/Circle button - exit
-                            self.close()
-                    
-                    state['last_buttons'][btn_idx] = current_pressed
-                        
-        except Exception:
-            pass
+        held = self.read_pads()
+        pressed = held & ~self.pad_held
+        self.pad_held = held
+        if QtWidgets.QApplication.activeWindow() is None:
+            self.pad_repeat = None
+            return
+        now = time.monotonic()
+        steer = held & PAD_STEER
+        if pressed & PAD_STEER:
+            self.pad_repeat = (steer, now + 0.4)
+            self.pad_later(pressed & PAD_STEER)
+        elif steer and self.pad_repeat and self.pad_repeat[0] == steer and now >= self.pad_repeat[1]:
+            # Held, it repeats after a short wait, as a held arrow key does.
+            self.pad_repeat = (steer, now + 0.12)
+            self.pad_later(steer)
+        elif not steer:
+            self.pad_repeat = None
+        for bit in (PAD_A, PAD_START, PAD_B, PAD_Y):
+            if pressed & bit:
+                self.pad_later(bit)
+
+    def pad_later(self, bits):
+        """Act on one press after this poll returns; one direction at a time, Up first."""
+        for bit in (PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_A, PAD_START, PAD_B, PAD_Y):
+            if bits & bit:
+                QtCore.QTimer.singleShot(0, lambda bit=bit: self.pad_act(bit))
+                return
+
+    def pad_act(self, bit):
+        """One press: on a window the menu opened, there; else on the menu's own buttons,
+        where the pad and the keyboard share one place, the focused button."""
+        modal = QtWidgets.QApplication.activeModalWidget()
+        if modal is not None:
+            self.pad_act_in_dialog(modal, bit)
+            return
+        buttons = self.nav_buttons()
+        if not buttons:
+            return
+        focus = QtWidgets.QApplication.focusWidget()
+        if focus in buttons:
+            self.current_button_index = buttons.index(focus)
+        else:
+            # Nothing of the menu's has focus yet: the first press only shows where the pad is.
+            if not 0 <= self.current_button_index < len(buttons):
+                self.current_button_index = 0
+            buttons[self.current_button_index].setFocus()
+            self.show_in_list(buttons[self.current_button_index])
+            return
+        if bit == PAD_UP:
+            self.navigate_up(buttons)
+        elif bit == PAD_DOWN:
+            self.navigate_down(buttons)
+        elif bit in (PAD_A, PAD_START):
+            buttons[self.current_button_index].click()
+
+    def pad_act_in_dialog(self, dialog, bit):
+        """The pad on the Choose Your Game page or a message box. Up and Down move (row to
+        row on the page), Left and Right move between a row and its star or between Yes and
+        No, A presses, Y stars the game in focus, B closes the window as Escape would."""
+        focus = dialog.focusWidget()
+        if bit == PAD_B:
+            escape = dialog.escapeButton() if isinstance(dialog, QtWidgets.QMessageBox) else None
+            if escape is not None:
+                escape.click()
+            else:
+                dialog.reject()
+        elif bit in (PAD_UP, PAD_DOWN) and hasattr(focus, "step"):
+            focus.step(bit == PAD_DOWN)
+        elif hasattr(focus, "step") and bit in (PAD_LEFT, PAD_RIGHT):
+            if bit == PAD_RIGHT and focus.star is not None:
+                focus.star.setFocus()  # a row's star, as Right does on the keyboard
+        elif getattr(focus, "row", None) is not None and bit & PAD_STEER:
+            # On a star: Left goes back to its row, Up and Down move on from it.
+            if bit == PAD_LEFT:
+                focus.row.setFocus()
+            elif bit in (PAD_UP, PAD_DOWN):
+                focus.row.step(bit == PAD_DOWN)
+        elif bit & PAD_STEER:
+            dialog.focusNextPrevChild(bit in (PAD_DOWN, PAD_RIGHT))
+        elif bit in (PAD_A, PAD_START):
+            if hasattr(focus, "on_press"):
+                focus.on_press()
+            elif isinstance(focus, QtWidgets.QAbstractButton):
+                focus.click()
+        elif bit == PAD_Y and getattr(focus, "star", None) is not None:
+            focus.star.click()
+        elif bit == PAD_Y and getattr(focus, "row", None) is not None:
+            focus.click()  # Y on the star itself
 
     def navigate_up(self, buttons):
         """Navigate up in menu"""
@@ -10841,6 +15570,7 @@ class GameMenu(QtWidgets.QWidget):
         else:
             self.current_button_index = len(buttons) - 1  # Wrap to last
         buttons[self.current_button_index].setFocus()
+        self.show_in_list(buttons[self.current_button_index])
     
     def navigate_down(self, buttons):
         """Navigate down in menu"""
@@ -10849,18 +15579,28 @@ class GameMenu(QtWidgets.QWidget):
         else:
             self.current_button_index = 0  # Wrap to first
         buttons[self.current_button_index].setFocus()
+        self.show_in_list(buttons[self.current_button_index])
+
+    def eventFilter(self, obj, event):
+        """Up and Down pressed on one of the menu's buttons move through the menu.
+
+        A button left to itself takes the arrow keys and moves along Qt's tab
+        chain, which is the order the buttons were made in, not the screen's: the
+        games under PLAY GAMES are made last, so Down from PLAY GAMES jumped to
+        UNINSTALL, and keyPressEvent below (the screen's order, shared with a
+        controller) only ever ran when no button had focus.
+        """
+        if event.type() == QtCore.QEvent.KeyPress:
+            if event.key() in (QtCore.Qt.Key_Up, QtCore.Qt.Key_Down):
+                self.keyPressEvent(event)
+                return True
+            if event.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right):
+                return True  # a column of buttons has no left or right
+        return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event):
         """Handle keyboard navigation"""
-        # Get list of buttons for navigation
-        buttons = [self.play_btn]
-        if hasattr(self, 'bonus_btn'):
-            buttons.append(self.bonus_btn)
-        if hasattr(self, 'mods_btn'):
-            buttons.append(self.mods_btn)
-        if getattr(self, 'steam_btn', None) is not None:
-            buttons.append(self.steam_btn)
-        buttons.extend([self.uninstall_btn, self.exit_btn])
+        buttons = self.nav_buttons()
 
         # Find currently focused button and update index
         current_index = -1
@@ -10898,6 +15638,8 @@ class GameMenu(QtWidgets.QWidget):
         self.offset = None
 
 if __name__ == "__main__":
+    # No context-help "?" on any dialog this menu opens (Qt 5 adds one to each).
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_DisableWindowContextHelpButton)
     app = QtWidgets.QApplication(sys.argv)
     window = GameMenu()
     window.show()
@@ -10983,7 +15725,31 @@ def prebuilt_menu_exe():
 
 
 if __name__ == '__main__':
-    ensure_structure()
+    try:
+        ensure_structure()
+    except OSError:
+        # A folder Rialto cannot write to, such as a zip unpacked into Program Files: one plain message
+        # instead of a crash at the first line (1.5.1, launch day).
+        import tkinter.messagebox
+        _root = tk.Tk()
+        _root.withdraw()
+        tkinter.messagebox.showerror(
+            "Rialto",
+            "Rialto can't write to the folder it is in:\n%s\n\nRialto keeps its settings, profiles and "
+            "discs beside itself, so it needs a folder you can write to. Install it with "
+            "Rialto-%s-Setup.exe, or unzip it into a folder of your own, not Program Files." % (APP_ROOT, __version__))
+        _root.destroy()
+        sys.exit(1)
+    # The name Rialto's Setup watches (its AppMutex), so an update asks for Rialto to be closed before
+    # it starts. Left to Windows' Restart Manager, the window closed but the one-file EXE's first process
+    # stayed running and held Rialto.exe, and the update could not replace it (1.5.1, launch day). Released
+    # by Windows when Rialto exits; kept in a module global until then.
+    try:
+        import ctypes
+        _SETUP_WATCHES = ctypes.windll.kernel32.CreateMutexW(None, False, "RialtoDiscMaker15")
+    except Exception:
+        _SETUP_WATCHES = None
     root = tk.Tk()
     app = RialtoApp(root)
+    quiet_alt_tap(root, when=lambda: getattr(app, "_building", False))  # its menus stay a keypress away otherwise
     root.mainloop()

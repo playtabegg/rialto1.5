@@ -43,12 +43,14 @@ def make_fixture(root):
     touch(os.path.join(root, "README.md"), b"# Rialto\n")
     touch(os.path.join(root, "SIGNING.md"), b"# Signing\n")
     touch(os.path.join(root, "requirements.txt"), b"pillow>=10,<12\n")
-    touch(os.path.join(root, "launch_rialto.bat"), b"@echo off\n")
-    touch(os.path.join(root, "debug_rialto.bat"), b"@echo off\n")
-    touch(os.path.join(root, "rialto.spec"), b"# spec\n")
-    touch(os.path.join(root, "menu.spec"), b"# spec\n")
+    touch(os.path.join(root, "scripts", "launch_rialto.bat"), b"@echo off\n")
+    touch(os.path.join(root, "scripts", "debug_rialto.bat"), b"@echo off\n")
+    touch(os.path.join(root, "packaging", "rialto.spec"), b"# spec\n")
+    touch(os.path.join(root, "packaging", "menu.spec"), b"# spec\n")
     touch(os.path.join(root, "assets", "bird_icon.ico"), b"ico")
     touch(os.path.join(root, "docs", "rialto-guide.html"), b"<html></html>")
+    touch(os.path.join(root, "licenses", "THIRD-PARTY.txt"), b"Inno Setup, mkisofs, Cygwin\n")
+    touch(os.path.join(root, "licenses", "GPL-2.0.txt"), b"GNU GENERAL PUBLIC LICENSE\n")
     # Forbidden - must not land in the output
     touch(os.path.join(root, "signing_config.json"), b'{"endpoint":"secret"}')
     touch(os.path.join(root, "config.json"), b"{}")
@@ -60,10 +62,17 @@ def make_fixture(root):
     touch(os.path.join(root, "tools", "TrustedSigning", "dlib.dll"), b"dll")
     touch(os.path.join(root, "__pycache__", "Rialto.cpython-39.pyc"), b"pyc")
     touch(os.path.join(root, "Game.iso"), b"iso")
+    # Only the named launchers and specs come out of scripts/ and packaging/, never anything else there
+    touch(os.path.join(root, "scripts", "notes.txt"), b"x")
+    touch(os.path.join(root, "packaging", "build", "Rialto", "warn-Rialto.txt"), b"x")
+    # The old places (1.5.0) are not on the list any more
+    touch(os.path.join(root, "launch_rialto.bat"), b"@echo off\n")
+    touch(os.path.join(root, "rialto.spec"), b"# spec\n")
     return [
         "Rialto.exe", "menu.exe", "README.md", "SIGNING.md", "requirements.txt",
-        "launch_rialto.bat", "debug_rialto.bat", "rialto.spec", "menu.spec",
+        "scripts/launch_rialto.bat", "scripts/debug_rialto.bat", "packaging/rialto.spec", "packaging/menu.spec",
         "assets/bird_icon.ico", "docs/rialto-guide.html",
+        "licenses/GPL-2.0.txt", "licenses/THIRD-PARTY.txt",
     ]
 
 
@@ -93,6 +102,8 @@ def main():
             says(f"{name} is absent", not os.path.exists(os.path.join(dest, name)))
         for folder in ("input", "output", "templates", "tools", "__pycache__"):
             says(f"{folder}/ is absent", not os.path.exists(os.path.join(dest, folder)))
+        says("licenses/ ships: the texts for the tools Rialto.exe carries (1.5.1)",
+             os.path.isfile(os.path.join(dest, "licenses", "THIRD-PARTY.txt")))
         print()
 
         print("2. unsigned binaries are refused when signtool can check")

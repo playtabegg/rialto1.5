@@ -44,7 +44,7 @@ account. The shared original is never touched.
 2. Register the `Microsoft.CodeSigning` resource provider on that subscription.
 3. Create an **Artifact Signing account**, Basic plan. Note the region.
 4. **Identity validations → New identity → Public.** Microsoft puts this at 1 to 20 business
-   days. Individuals verify in the US and Canada; organisations in a wider list. Start early.
+   days. Individuals verify in the US and Canada; organizations in a wider list. Start early.
 5. Create a **Public Trust** certificate profile once validation completes.
 6. Give your own user the **Artifact Signing Certificate Profile Signer** role. Without it
    everything looks correct and signing fails at the last second.

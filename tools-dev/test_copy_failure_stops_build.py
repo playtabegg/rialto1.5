@@ -36,7 +36,7 @@ def method(src, name):
 
 
 def host(method_src, shutil_module):
-    ns = {"os": os, "shutil": shutil_module}
+    ns = {"os": os, "shutil": shutil_module, "time": __import__("time")}
     exec("class Host:\n" + textwrap.indent(method_src, "    "), ns)
     h = ns["Host"]()
     h.log = []
@@ -57,7 +57,10 @@ class FullDiskShutil:
 def main():
     with open(RIALTO, encoding="utf-8") as fh:
         src = fh.read()
-    copy_src = method(src, "copy_game_files_to_output")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import progress_stub
+    # The copy goes through counting_copy since 1.5.1 (B6): the real one, no window.
+    copy_src = method(src, "copy_game_files_to_output") + "\n\n" + progress_stub.methods(src)
 
     base = tempfile.mkdtemp(prefix="rialto_copyfail_")
     try:

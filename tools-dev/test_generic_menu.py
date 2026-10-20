@@ -13,7 +13,7 @@ below checks that move actually holds, without launching the GUI or PyQt5:
   3. every key the menu reads out of the config is a key Rialto writes
   4. stage_menu_executable copies the pre-built exe, and falls back the way it
      claims to when there isn't one
-  5. menu.spec builds something signable and unbranded
+  5. packaging/menu.spec builds something signable and unbranded
 
 Usage: python test_generic_menu.py [path-to-rialto1.5]
 """
@@ -35,7 +35,7 @@ for _stream in (sys.stdout, sys.stderr):
 REPO = sys.argv[1] if len(sys.argv) > 1 else \
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RIALTO = os.path.join(REPO, "Rialto.pyw")
-MENU_SPEC = os.path.join(REPO, "menu.spec")
+MENU_SPEC = os.path.join(REPO, "packaging", "menu.spec")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from menu_source import extract_menu_source  # noqa: E402
@@ -242,9 +242,19 @@ for n in ast.walk(MENU_TREE):
 written = None
 for node in ast.walk(ast.parse(RIALTO_SRC)):
     if isinstance(node, ast.FunctionDef) and node.name == "build_menu_config":
+        # The dict it returns, as a literal or as `config = {...}` with keys
+        # added after it (start_menu_per_game, 1.5.1, only when asked for).
         for sub in ast.walk(node):
             if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Dict):
                 written = {k.value for k in sub.value.keys if isinstance(k, ast.Constant)}
+            elif isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Dict) \
+                    and getattr(sub.targets[0], "id", "") == "config":
+                written = (written or set()) | {k.value for k in sub.value.keys if isinstance(k, ast.Constant)}
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign) and isinstance(sub.targets[0], ast.Subscript) \
+                    and getattr(sub.targets[0].value, "id", "") == "config" \
+                    and isinstance(sub.targets[0].slice, ast.Constant) and written is not None:
+                written.add(sub.targets[0].slice.value)
 ok("build_menu_config returns a dict literal", written is not None, str(sorted(written or [])))
 print(f"       menu reads:  {sorted(config_reads)}")
 print(f"       Rialto writes: {sorted(written or [])}")
@@ -413,7 +423,7 @@ print()
 
 
 # --------------------------------------------------------------------------
-print("5. menu.spec")
+print("5. packaging/menu.spec")
 spec_src = open(MENU_SPEC, encoding="utf-8").read()
 spec_tree = ast.parse(spec_src)
 ok("menu.spec compiles", bool(compile(spec_tree, MENU_SPEC, "exec")))
@@ -450,7 +460,7 @@ ok("the neutral icon exists", os.path.isfile(os.path.join(REPO, "assets", "menu_
 
 # PyInstaller 6 raises on these the moment they are truthy; they must be gone
 # from both specs, not merely set to a falsy value.
-for spec_path in (MENU_SPEC, os.path.join(REPO, "rialto.spec")):
+for spec_path in (MENU_SPEC, os.path.join(REPO, "packaging", "rialto.spec")):
     tree = ast.parse(open(spec_path, encoding="utf-8").read())
     passed = set()
     for node in ast.walk(tree):

@@ -305,6 +305,40 @@ ok(".deps_installed is gitignored",
    ".deps_installed" in open(os.path.join(REPO, ".gitignore"), encoding="utf-8").read())
 print()
 
+# The launchers live in scripts/ (1.5.1). Rialto.pyw stays at the top, so the marker above stays
+# beside it; each launcher has to find Rialto.pyw in the folder above its own and run it from there.
+print("the launchers in scripts/")
+FIND_ROOT = 'for %%I in ("%~dp0..") do set "RIALTO_DIR=%%~fI"'
+for name in ("launch_rialto.bat", "debug_rialto.bat"):
+    path = os.path.join(REPO, "scripts", name)
+    ok(f"{name} is in scripts/, not at the top",
+       os.path.isfile(path) and not os.path.exists(os.path.join(REPO, name)))
+    with open(path, encoding="utf-8") as f:
+        bat = f.read()
+    ok(f"{name}: RIALTO_DIR is the folder above scripts/", FIND_ROOT in bat)
+    ok(f"{name}: runs from there", 'cd /d "%RIALTO_DIR%"' in bat)
+    ok(f"{name}: starts the Rialto.pyw up there", '"%RIALTO_DIR%\\Rialto.pyw"' in bat)
+    ok(f"{name}: guards against a python.exe in the Rialto folder",
+       'if exist "%RIALTO_DIR%\\python.exe"' in bat and 'if exist "%RIALTO_DIR%\\pythonw.exe"' in bat)
+    ok(f"{name}: nothing is looked for beside the launcher any more", "%~dp0Rialto.pyw" not in bat
+       and "%~dp0python" not in bat)
+# The line that finds the folder, run for real by cmd, from a scripts folder under a name with spaces.
+if os.name == "nt":
+    import subprocess
+    stage = tempfile.mkdtemp(prefix="rialto launcher ")
+    try:
+        os.makedirs(os.path.join(stage, "scripts"))
+        probe = os.path.join(stage, "scripts", "probe.bat")
+        with open(probe, "w", encoding="ascii", newline="\r\n") as f:
+            f.write("@echo off\n" + FIND_ROOT + "\necho %RIALTO_DIR%\n")
+        found = subprocess.run(["cmd", "/c", probe], capture_output=True, text=True, cwd=tempfile.gettempdir(),
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+        check("cmd resolves RIALTO_DIR to the folder above scripts/", os.path.normcase(os.path.realpath(found)),
+              os.path.normcase(os.path.realpath(stage)))
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+print()
+
 if failures:
     print(f"FAILED ({len(failures)}):")
     for f in failures:

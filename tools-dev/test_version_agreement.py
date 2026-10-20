@@ -1,6 +1,6 @@
 """One version, three readers, all agreeing.
 
-Rialto.pyw carries ``__version__``; rialto.spec and menu.spec read it from
+Rialto.pyw carries ``__version__``; packaging/rialto.spec and packaging/menu.spec read it from
 that line for the EXE version resources; the release feed compares against
 it. This pins that the three cannot drift.
 
@@ -31,7 +31,7 @@ match = re.search(r'^__version__ = "(\d+\.\d+\.\d+)"$', source, re.M)
 check(match is not None, 'Rialto.pyw has no __version__ = "X.Y.Z" line')
 version = match.group(1) if match else ""
 
-for spec in ("rialto.spec", "menu.spec"):
+for spec in ("packaging/rialto.spec", "packaging/menu.spec"):
     text = read(spec)
     check("VERSION = (1, 5, 0, 0)" not in text, spec + " still hard-codes a version tuple")
     check('__version__ = "' in text and "Rialto.pyw" in text, spec + " does not read __version__ from Rialto.pyw")
@@ -40,10 +40,10 @@ check('("Check for a New Rialto…", self.check_for_new_rialto)' in source,
       "the Help menu has no Check for a New Rialto item")
 check("check_for_update(__version__)" in source, "the check does not compare against __version__")
 check("urllib.request.urlretrieve(" not in source, "Rialto.pyw still uses urlretrieve somewhere")
-check("urllib.request.urlretrieve(" not in read("trusted_signing.py"), "trusted_signing.py still uses urlretrieve")
+check("urllib.request.urlretrieve(" not in read("rialto/trusted_signing.py"), "rialto/trusted_signing.py still uses urlretrieve")
 
 if failures:
     for item in failures:
         print("FAIL:", item)
     sys.exit(1)
-print("OK: version %s agreed by Rialto.pyw, rialto.spec and menu.spec" % version)
+print("OK: version %s agreed by Rialto.pyw, packaging/rialto.spec and packaging/menu.spec" % version)

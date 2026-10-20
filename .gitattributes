@@ -1,2 +1,6 @@
 # Batch launchers must keep Windows line endings on every checkout.
 *.bat text eol=crlf
+
+# License texts are carried byte for byte inside Rialto.exe and pinned by
+# SHA-256 in helpers/MANIFEST.json, so no checkout may change their line endings.
+licenses/** -text

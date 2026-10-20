@@ -578,7 +578,7 @@ code, kbd {
     <div>
       <h3>Create a certificate profile</h3>
       <p>Once validation says Completed: <b>Certificate profiles</b>, <b>Create</b>, type
-      <b>Public Trust</b>. Name it something you will recognise, leave Program Type on None,
+      <b>Public Trust</b>. Name it something you will recognize, leave Program Type on None,
       and pick your validated identity under Verified CN and O. Write the profile name down
       too, Rialto asks for it.</p>
     </div>
@@ -663,13 +663,13 @@ Cover, in this order:
 1. Creating an Azure account with a pay-as-you-go subscription (a free trial subscription does not work for this service).
 2. Registering the Microsoft.CodeSigning resource provider on that subscription.
 3. Creating an Artifact Signing account on the Basic plan (about $9.99/month, 5,000 signatures), and how to pick the right region.
-4. Identity validation. I am an INDIVIDUAL developer, not a company - tell me what ID I need, warn me about the parts people get wrong, and tell me how long it usually takes. If I say I am a company instead, switch to the organisation path.
+4. Identity validation. I am an INDIVIDUAL developer, not a company - tell me what ID I need, warn me about the parts people get wrong, and tell me how long it usually takes. If I say I am a company instead, switch to the organization path.
 5. Creating a Public Trust certificate profile once validation passes.
 6. Giving my own user the "Artifact Signing Certificate Profile Signer" role, and explaining why signing fails without it.
 7. Installing the Azure CLI and running az login.
 8. Finding the three values I have to type into my build tool: the region endpoint URL, the account name, and the certificate profile name. Tell me exactly where in the portal each one is.
 
-At the end, print those three values back to me as a labelled list so I can copy them across. If a step fails, help me diagnose it before we move on.</pre>
+At the end, print those three values back to me as a labeled list so I can copy them across. If a step fails, help me diagnose it before we move on.</pre>
   </div>
 
   <p style="font-size:.9rem;color:var(--ink-soft)">The same prompt sits inside Rialto, under

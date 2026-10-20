@@ -40,7 +40,7 @@ REPO = sys.argv[1] if len(sys.argv) > 1 else \
 RIALTO = os.path.join(REPO, "Rialto.pyw")
 
 sys.path.insert(0, REPO)
-import trusted_signing  # noqa: E402  (the real module, driven with a fake signer)
+from rialto import trusted_signing  # noqa: E402  (the real module, driven with a fake signer)
 
 failures = []
 
@@ -305,7 +305,10 @@ print()
 
 # --------------------------------------------------------------------------
 print("4. the Sign Final Build gate and the failure path")
-hook_src = methods(RIALTO_SRC, "RialtoApp", ["sign_staged_menu_exe"])
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import progress_stub  # noqa: E402
+# The signature is made with the window answering since 1.5.1 (B6).
+hook_src = methods(RIALTO_SRC, "RialtoApp", ["sign_staged_menu_exe"]) + "\n\n" + progress_stub.methods(RIALTO_SRC)
 
 
 def run_hook(sign_final, configured, signer):
@@ -314,7 +317,7 @@ def run_hook(sign_final, configured, signer):
     os.makedirs(menu)
     with open(os.path.join(menu, "menu.exe"), "wb") as f:
         f.write(SHARED_MENU_BYTES)
-    ns = {"os": os, "sys": sys}
+    ns = dict(progress_stub.namespace(), sys=sys)
     exec(f"class Host:\n{textwrap.indent(hook_src, '    ')}", ns)
     host = ns["Host"]()
     log = []

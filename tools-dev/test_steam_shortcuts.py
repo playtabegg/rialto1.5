@@ -66,6 +66,15 @@ STEAM_METHODS = [
 ]
 
 
+def english_strings():
+    """The menu's English strings: every popup line now comes from the translations."""
+    tree = ast.parse(menu_source(open(RIALTO, encoding="utf-8").read()))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(t, "attr", "") == "translations" for t in node.targets):
+            return ast.literal_eval(node.value)["English"]
+    raise SystemExit("translations not found")
+
+
 def make_menu(tmp, game_dir, vdf_paths, steam_running=False, art=True,
               games_config=None, resolved_exe=None):
     """A stub disc menu with the real Steam methods on it."""
@@ -82,6 +91,8 @@ def make_menu(tmp, game_dir, vdf_paths, steam_running=False, art=True,
     menu._steam_shortcuts_paths = lambda: list(vdf_paths)
     menu._steam_is_running = lambda: steam_running
     menu.show_preview_notice = lambda: None
+    menu.translations = {"English": english_strings()}
+    menu.current_lang = "English"
 
     said = []
     menu._menu_message = lambda title, text, detail="": said.append((title, text, detail))

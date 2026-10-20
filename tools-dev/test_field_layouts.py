@@ -189,7 +189,7 @@ def main():
         # --------------------------------------------------------------
         print("2. a profile path from another input root is found again")
         rebase_src = extract(src, "RialtoApp",
-                             ["rebase_under_game", "rebase_stale_paths",
+                             ["rebase_under_game", "rebase_stale_paths", "rebase_file_under_game", "REBASEABLE_FILES",
                               "missing_configured_extras", "REBASEABLE_PATHS"])
         stale = "C:/Rialto/input/MyGame/game/Linux x86_64 Portable"
         r = host(rebase_src, current_game_path=game,
