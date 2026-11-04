@@ -192,7 +192,9 @@ def meter_against_build(src, media_types, reserve, margin, count, work):
         return path
 
     game = os.path.join(work, "Demo")
-    touch(os.path.join(game, "Demo.exe"), 85 * MB)
+    # 85 MB until the meter counted the Linux build once, as the build places it (his word, 4 November 2026):
+    # the set then fitted two mini CDs either way, and this check is of a set the old Disc 1 miscounts.
+    touch(os.path.join(game, "Demo.exe"), 185 * MB)
     linux = os.path.join(work, "Demo Linux")
     touch(os.path.join(linux, "Demo.x86_64"), 100 * MB)
     art = os.path.join(work, "art")
@@ -201,20 +203,34 @@ def meter_against_build(src, media_types, reserve, margin, count, work):
     disc_icon = touch(os.path.join(art, "disc_icon.ico"), 370_070)
     menu_exe = touch(os.path.join(work, "dist", "menu.exe"), 37_410_096)
     shim = dow.ShimOs(sizes)
-    host = media_host(src, {"os": shim, "prebuilt_menu_exe": lambda: menu_exe},
-                      ["menu_staging_bytes", "disc_weights"], MINI_CD, bg_path_var=Var(background))
-    for const in ("RUNTIME_STORED", "DISC1_FILES_ALLOWANCE"):
+    videos = module_names(src, ast.parse(src), ("VIDEO_EXTENSIONS",))["VIDEO_EXTENSIONS"]
+    host = media_host(src, {"os": shim, "prebuilt_menu_exe": lambda: menu_exe, "VIDEO_EXTENSIONS": videos},
+                      ["menu_staging_bytes", "menu_inside_bytes", "menu_music_source", "menu_font_choice",
+                       "menu_theme_path", "disc_weights", "unix_build_bytes", "folder_is_already_packaged"],
+                      MINI_CD, bg_path_var=Var(background),
+                      steam_button_var=Var(False))  # the disc below carries no menu/steam/
+    for const in ("RUNTIME_STORED", "DISC1_FILES_ALLOWANCE", "UNIX_ARCHIVE_SUFFIXES", "UNIX_NOTES_ALLOWANCE"):
         setattr(host, const, dow.extract_class_constant(src, "RialtoApp", const))
     menu_extra = host.menu_staging_bytes()
-    extras = [background, "", "", game_icon, disc_icon, "", linux, ""]
-    total, disc1 = host.disc_weights(game, extras, ["", linux], menu_extra, [game_icon, disc_icon])
+    menu_inside = host.menu_inside_bytes()
+    # refresh_disc_meter's order: the logo, the company logo, the two icons, the bonus folder.
+    extras = ["", "", game_icon, disc_icon, ""]
+    builds = [("Mac", "", "Demo-Mac"), ("Linux", linux, "Demo-Linux")]
+    total, disc1 = host.disc_weights(game, extras, [""], menu_extra, [game_icon, disc_icon], False, menu_inside,
+                                     builds)
+    # The Linux build as stage_universal_builds packs it: one .tar.gz, gzip at its heaviest, and START HERE.txt.
+    linux_weight, _sectors = host.unix_build_bytes(linux, "Demo-Linux")
+    says("the 100 MB Linux build weighs its archive at most, %.2f MB" % (linux_weight / MB),
+         100 * MB < linux_weight < 100 * MB + 100 * MB // 1000 + 64 * 1024, linux_weight)
 
     # The build folder the same game makes, packed by the real create_spanned_isos.
     out = os.path.join(work, "output", "Demo")
     for rel, size in (("setup.exe", 2_615_232), ("autorun.inf", 133), ("README.txt", 281), ("menu.bat", 2_238),
                       ("start_menu.bat", 837), ("game_icon.ico", 370_070), ("disc_icon.ico", 370_070),
                       ("menu/menu.exe", 37_410_096), ("menu/background.gif", 5 * MB),
-                      ("menu/steam_art_and_dlls.bin", 4 * 1024 * 1024), ("Linux/Demo.x86_64", 100 * MB)):
+                      ("menu/steam_art_and_dlls.bin", 4 * 1024 * 1024),
+                      ("Linux/Demo-Linux.tar.gz", linux_weight - host.UNIX_NOTES_ALLOWANCE),
+                      ("Linux/START HERE.txt", 600)):
         touch(os.path.join(out, *rel.split("/")), size)
     payload = total - disc1  # what the meter puts in the slices; the build is given the same
     slicer = media_host(src, {}, ["get_target_media_capacity", "get_disk_slice_size"], MINI_CD)
@@ -242,12 +258,20 @@ def meter_against_build(src, media_types, reserve, margin, count, work):
 
     # Fastest install stores everything as it is: the menu is on the disc and inside the installer, and the
     # runtimes weigh what they weigh. Every other compression reads as it did.
-    stored, _d1 = host.disc_weights(game, extras, ["", linux], menu_extra, [game_icon, disc_icon], True)
+    stored, _d1 = host.disc_weights(game, extras, [""], menu_extra, [game_icon, disc_icon], True, menu_inside,
+                                    builds)
+    # The background's installer copy (menu_inside) is in the whole menu Fastest install counts again, so it
+    # is not added twice there. 1.5.1's pin had no menu_inside, the background then being one of the extras.
     says("Fastest install: the menu counted again, the runtimes at their weight, Disc 1's own files",
          stored - total == (menu_extra - host.RUNTIME_ALLOWANCE) + host.RUNTIME_STORED - host.RUNTIME_ALLOWANCE
-         + host.DISC1_FILES_ALLOWANCE + 2 * ((-(-370_070 // 2048) + 1) * 2048), stored - total)
-    says("the other compressions' total is 1.5.1's before this fix: game, art, the folders twice, the menu",
-         total == 85 * MB + 5 * MB + 2 * 370_070 + 100 * MB + 100 * MB + menu_extra, total)
+         + host.DISC1_FILES_ALLOWANCE + 2 * ((-(-370_070 // 2048) + 1) * 2048) - menu_inside, stored - total)
+    # Counted as the build places them (his word, 4 November 2026: "Count as the build does"). 1.5.1 pinned
+    # 85 + 5 + 2 x 0.37 + 100 + 100 MB + the menu, for the 85 MB game: the Linux build twice, as its source
+    # tree, though the build puts it on the disc root once, after ISCC. The background stays twice: in menu/
+    # on the disc root and, through menu_inside, in the installer's menu/.
+    says("the other compressions' total: game, the background's installer copy, the icons, the Linux build "
+         "once, the menu",
+         total == 185 * MB + 5 * MB + 2 * 370_070 + linux_weight + menu_extra, total)
 
 
 def main():
@@ -334,11 +358,11 @@ def main():
     says("a 150 MB demo on a Mini CD: one disc, in MB", line == "150 MB of 204 MB usable on %s - 73%%" % MINI_CD, line)
     line = meter(MINI_CD, 400 * MB, disc1=50 * MB)
     want = count(50 * MB, 350 * MB, cd, reserve, margin)
-    says("400 MB on Mini CDs: the build's count, %d" % want, line.endswith(" - about %d discs" % want), line)
+    says("400 MB on Mini CDs: the build's count, %d" % want, line.endswith(" - about %d discs, fewer once compressed" % want), line)
     line = meter(MINI_DVD, 1_200 * MB)
     says("1.2 GB on a Mini DVD", line == "1.20 GB of 1.44 GB usable on %s - 83%%" % MINI_DVD, line)
     says("the meter keeps Disc 1's weight beside the total, from disc_weights",
-         "self._fill_bytes, self._disc1_bytes = self.disc_weights(" in flat)
+         "weights = self.disc_weights(" in flat and "self._fill_bytes, self._disc1_bytes = weights" in flat)
     says("the over-limit line in MB under a gigabyte",
          'else f"{total_size // 1_000_000} MB")' in flat and "Build is {weight}, over the" in flat)
 
@@ -416,7 +440,7 @@ def main():
     line = meter("CD 700 MB", 500 * MB)
     says("the meter on a CD 700 MB reads as 1.5.0's did", line == "0.50 GB of 0.64 GB usable on CD 700 MB - 79%", line)
     line = meter("DVD 4.7 GB", 10_000 * MB)
-    says("and a set on DVD counts as 1.5.0's did", line.endswith(" - about %d discs" % (int(10e9 // (4.7e9 - reserve)) + 1)), line)
+    says("and a set on DVD counts as 1.5.0's did", line.endswith(" - about %d discs, fewer once compressed" % (int(10e9 // (4.7e9 - reserve)) + 1)), line)
     print()
 
     print("7. the dropdown, its tooltips and the Help Guide")

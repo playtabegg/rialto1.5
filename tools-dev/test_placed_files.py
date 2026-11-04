@@ -179,8 +179,11 @@ def main():
 
     print("5. Rialto keeps the rows with the profile")
     says("saved with the profile", 'profile_data["PlacedFiles"] = self.placed_files' in src)
+    # Load Profile and the start put a profile on the form through one list (readiness, 4 Nov).
     says("read back on load and on restore, rows only",
-         src.count('self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]') == 2)
+         src.count('self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]') == 1
+         and "self.put_profile_on_form(profile_data)" in src
+         and "self.put_profile_on_form(profile_data, at_start=True)" in src)
     says("cleared for a new profile", "        self.placed_files = []\n        self.refresh_game_exes_summary()" in src.replace("\r\n", "\n"))
     says("the build stages them before the installer script",
          src.index("self.stage_placed_files(output_path)") < src.index("self.generate_enhanced_installer_script(output_path, meta)"))

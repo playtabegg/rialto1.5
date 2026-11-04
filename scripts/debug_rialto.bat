@@ -33,7 +33,7 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Python was not found on your PATH.
     echo.
-    echo   Install Python 3.12 (3.9 to 3.12 are tested) from https://www.python.org/downloads/
+    echo   Install 64-bit Python 3.12 or later from https://www.python.org/downloads/
     echo   and tick "Add python.exe to PATH" during setup, then open a
     echo   new window and run this file again.
     echo.

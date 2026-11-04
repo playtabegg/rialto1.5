@@ -179,8 +179,8 @@ def main():
     nav = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "nav_buttons")
     order = [a.value for a in ast.walk(nav) if isinstance(a, ast.Constant) and isinstance(a.value, str)
              and a.value.endswith("_btn")]
-    says("in the screen's order: compat, quick starts, mods, Steam, bonus",
-         order == ["compat_btn", "mods_btn", "steam_btn", "bonus_btn"], order)
+    says("in the screen's order: compat, quick starts, mods, Steam, bonus, then the Sound button in its corner",
+         order == ["compat_btn", "mods_btn", "steam_btn", "bonus_btn", "sound_btn"], order)
     says("every game listed under PLAY GAMES only on an installed disc of several",
          'if len(self.games) < 2 or getattr(self, "installer_path", ""):' in template)
 

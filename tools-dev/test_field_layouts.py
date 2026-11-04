@@ -152,11 +152,13 @@ def main():
            all(r == "" for r in returns) and returns)
 
         print("   and the config never claims a button it cannot back")
-        cfg_src = extract(src, "RialtoApp", ["build_menu_config"]) + "\n\n" + mod_src
+        import store_title_stub
+        cfg_src = extract(src, "RialtoApp", ["build_menu_config", "menu_theme_config", "menu_theme_font"]) + "\n\n" + mod_src
         cfg = host(cfg_src,
                    {"strip_wti_mentions": lambda s: s,
                     "sanitize_text": lambda v: str(v or ""),
-                    "split_launch_args": lambda v, **k: []},
+                    "split_launch_args": lambda v, **k: [],
+                    **store_title_stub.namespace(src)},
                    entries={"Title": Flag("MyGame")},
                    company_logo_var=Flag(""), publisher_text_var=Flag(""),
                    remove_wti_branding=Flag(False), steam_button_var=Flag(True),
@@ -190,7 +192,7 @@ def main():
         print("2. a profile path from another input root is found again")
         rebase_src = extract(src, "RialtoApp",
                              ["rebase_under_game", "rebase_stale_paths", "rebase_file_under_game", "REBASEABLE_FILES",
-                              "missing_configured_extras", "REBASEABLE_PATHS"])
+                              "missing_configured_extras", "REBASEABLE_PATHS", "REBASEABLE_THEME_FILES", "menu_theme_path"])
         stale = "C:/Rialto/input/MyGame/game/Linux x86_64 Portable"
         r = host(rebase_src, current_game_path=game,
                  mac_build_var=Flag(""), linux_build_var=Flag(stale),
@@ -219,7 +221,7 @@ def main():
         # --------------------------------------------------------------
         print("3. the compatibility test finds a game in a subfolder")
         test_src = extract(src, "RialtoApp", ["create_compatibility_test_script"])
-        t = host(test_src, {"escape_batch": lambda v: str(v)},
+        t = host(test_src, {"escape_batch": lambda v: str(v), **store_title_stub.namespace(src)},
                  entries={"Title": Flag("MyGame")})
         t.detect_primary_game_exe = lambda root: "game/Windows x86_64 Portable/MyGame.exe"
         t.create_compatibility_test_script(output)

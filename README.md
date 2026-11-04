@@ -1,18 +1,18 @@
-# Rialto 1.5.1
+# Rialto 1.5.2
 
 Turn your finished Windows game into a real disc: an autorun menu with your art, a proper installer, a disc icon and a ready-to-write ISO. Drop it in a drive and it feels like the games you grew up with.
 
 Free and open source, built by [We the Indies](https://wetheindies.com).
 
-**[Download Rialto 1.5.1](https://github.com/playtabegg/rialto1.5/releases/latest)** · [Signing guide](SIGNING.md) · The manual opens from **Help Guide** inside Rialto
+**[Download Rialto 1.5.2](https://github.com/playtabegg/rialto1.5/releases/latest)** · [Signing guide](SIGNING.md) · The manual opens from **Help Guide** inside Rialto
 
 ## Easier from the very first minute
 
-- Run `Rialto-1.5.1-Setup.exe` and Rialto opens, ready to build. No administrator prompt, no Python, nothing else to install.
+- Run `Rialto-1.5.2-Setup.exe` and Rialto opens, ready to build. No administrator prompt, no Python, nothing else to install.
 - Choose **File > Put Rialto on the Desktop** and launch Rialto like any normal app.
 - Your game's exe keeps its own name. No renaming to game.exe, ever.
-- Windows shows your disc by the Disc Name you type, in full up to 16 characters.
-- And way more, [see below](#whats-new-in-151).
+- Windows shows your disc by the Disc Name you type, shortened to fit when it's long.
+- What is new in each version is listed [below](#whats-new-in-152).
 
 ## What you need
 
@@ -35,13 +35,24 @@ Want to see a menu first? The download has a sample: click **Load Profile** and 
 
 ## Three ways to get Rialto
 
-- **The installer.** Run `Rialto-1.5.1-Setup.exe` from the [latest release](https://github.com/playtabegg/rialto1.5/releases/latest). Rialto goes in your own user folder, with a Start Menu shortcut and a desktop shortcut, and opens at the end. A newer Setup later updates Rialto and keeps your settings and profiles.
-- **The portable folder.** Get `Rialto-1.5.1-Disc-Maker.zip` from the same release, unzip the whole folder somewhere you can write to (not Program Files) and run `Rialto.exe`. Keep `menu.exe` beside it: it is the disc menu Rialto puts on every disc. `Rialto.exe` is signed by We The Indies, LLC; `menu.exe` is unsigned on purpose, and [SIGNING.md](SIGNING.md) says why.
-- **From source.** `git clone` this repository and double-click `Rialto.pyw`. You need Python 3.9 to 3.12; Rialto installs its own packages on first run. Without a pre-built `menu.exe`, each build compiles its menu, which adds a minute or two.
+- **The installer.** Run `Rialto-1.5.2-Setup.exe` from the [latest release](https://github.com/playtabegg/rialto1.5/releases/latest). Rialto goes in your own user folder, with a Start Menu shortcut and a desktop shortcut, and opens at the end. A newer Setup later updates Rialto and keeps your settings and profiles.
+- **The portable folder.** Get `Rialto-1.5.2-Disc-Maker.zip` from the same release, unzip the whole folder somewhere you can write to (not Program Files) and run `Rialto.exe`. Keep `menu.exe` beside it: it is the disc menu Rialto puts on every disc. `Rialto.exe` is signed by We The Indies, LLC; `menu.exe` is unsigned on purpose, and [SIGNING.md](SIGNING.md) says why.
+- **From source.** `git clone` this repository and double-click `Rialto.pyw`. You need Python 3.12 or later; Rialto installs its own packages on first run. Without a pre-built `menu.exe`, each build compiles its menu, which adds a minute or two.
+
+## What's new in 1.5.2
+
+- **No time limit**: big games no longer time out. Every long step runs until it's done ([#4](https://github.com/playtabegg/rialto1.5/issues/4))
+- **Menu Music**: give your disc menu a theme song, a PCM WAV that loops while the menu is up
+- **The menu's own look**: hide the menu's title and logo when your background already shows them, and pick the font and colors
+- **Your own Steam art**: your capsule, header, hero, logo and icon in the player's Steam library
+- **The game's own name**: type "My Game (PC CD)" and players see "My Game"
+- **One install per game**: a new disc of the same game installs over the old one
+- **Discs install for the player**, with no administrator prompt
+- Every fix is in the [release notes](https://github.com/playtabegg/rialto1.5/releases/tag/v1.5.2)
 
 ## What's new in 1.5.1
 
-- **An installer**: `Rialto-1.5.1-Setup.exe` installs Rialto in one step, and **Help > Check for a New Rialto** downloads the next one for you
+- **An installer**: Rialto's Setup installs Rialto in one step, and **Help > Check for a New Rialto** downloads the next one for you
 - **Play Games**: on a disc of several games, the main menu lists every game, and a star puts favorites at the top
 - **Controllers** in the disc menu: any Xbox-style pad, or a pad switched to its Xbox mode
 - **The disc menu, fully translated**: all 34 languages now cover every label and popup, and the menu remembers the player's choice
@@ -81,7 +92,7 @@ Want to see a menu first? The download has a sample: click **Load Profile** and 
 
 **The download needs no Python.** `Rialto.exe` carries its own Python and packages, and never touches the Python on your PC.
 
-**Running from source** needs 64-bit Python 3.9 to 3.12 from [python.org](https://www.python.org/downloads/), installed with "Add python.exe to PATH" ticked. If the Microsoft Store opens when Python should run, you only have Windows' placeholder: install the real one. On first run Rialto asks once, then runs `pip install -r requirements.txt` into the Python that started it. There is no venv; make and activate your own if you want one. Delete the hidden `.deps_installed` file to force a reinstall. If nothing happens when you double-click `Rialto.pyw`, run `scripts\debug_rialto.bat` to see the error.
+**Running from source** needs 64-bit Python 3.12 or later from [python.org](https://www.python.org/downloads/), installed with "Add python.exe to PATH" ticked. If the Microsoft Store opens when Python should run, you only have Windows' placeholder: install the real one. On first run Rialto asks once, then runs `pip install -r requirements.txt` into the Python that started it. There is no venv; make and activate your own if you want one. Delete the hidden `.deps_installed` file to force a reinstall. If nothing happens when you double-click `Rialto.pyw`, run `scripts\debug_rialto.bat` to see the error.
 
 **What is where in the repository.** `Rialto.pyw` is the app. `rialto\` holds the modules it imports: signing, the MSIX export and the update check. `packaging\` holds the specs that build `Rialto.exe` and `menu.exe` with PyInstaller (`pyinstaller packaging\rialto.spec`, run from this top folder). `scripts\` holds two launchers, and `tools-dev\` the harnesses. `helpers\MANIFEST.json` pins the tools Rialto carries, and `licenses\` holds their license texts.
 

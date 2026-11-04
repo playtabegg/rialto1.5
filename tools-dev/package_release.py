@@ -8,7 +8,7 @@ in the output, and refuses unsigned binaries unless --allow-unsigned is set.
 
 Usage:
     python tools-dev/package_release.py --source dist --output release\\Rialto-1.5
-    python tools-dev/package_release.py --source dist --output release\\Rialto-1.5.1-Disc-Maker.zip
+    python tools-dev/package_release.py --source dist --output release\\Rialto-1.5.2-Disc-Maker.zip
     python tools-dev/package_release.py --source dist --output release\\Rialto-1.5 --allow-unsigned
 """
 import argparse

@@ -97,6 +97,8 @@ def make_host(src, extra_globals=None, **attrs):
     ])
     ns = {"os": os, "sys": sys, "shutil": shutil, "re": __import__("re")}
     ns.update(extra_globals or {})
+    import store_title_stub
+    ns.update(store_title_stub.namespace(src))  # every name the player sees (4 Nov 2026)
     exec(helpers, ns)
     exec("class Host:\n" + textwrap.indent(methods, "    "), ns)
     host = ns["Host"]()

@@ -569,13 +569,42 @@ def main():
         says("its next press is", opened == ["page"], opened)
         window.close()
 
+        print("8b. the language box's arrow is a triangle (readiness, 4 Nov)")
+        disc.configure("Demo Disc", ["Zeta", "alpha"])
+        mod, window = disc.open()
+        picture = window.lang_combo.grab().toImage()
+        # The drop-down's own 30 pixels at the right, so the language's white letters are not counted.
+        start = picture.width() - int(30 * window.scale_factor)
+        white = [[x for x in range(start, picture.width()) if QtGui.QColor(picture.pixel(x, y)).lightness() > 200]
+                 for y in range(picture.height())]
+        widths = [len(row) for row in white if row]
+        says("the arrow is drawn: white in the box", sum(widths) > 0, widths)
+        says("and narrows row by row to a point, not a bar of even width",
+             len(widths) >= 3 and widths[0] > widths[-1] and widths == sorted(widths, reverse=True), widths)
+        window.close()
+
+        print("8c. an upgrade keeps the player's stars and menu language from a disc named with the format")
+        games = disc.configure("Moth Lamp", ["Moth Lamp"], earlier_titles=["Moth Lamp (PC CD)", "Moth Lamp (PC DVD)"])
+        mod, window = disc.open()
+        old = mod["player_prefs_path"]("Moth Lamp (PC CD)")
+        window.close()
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        with open(old, "w", encoding="utf-8") as f:
+            json.dump({"stars": [games[0]["exe"]], "sort": "az", "lang": "French"}, f)
+        mod, window = disc.open()
+        says("the menu opens in the language picked on the 1.5.1 disc", window.current_lang == "French",
+             window.current_lang)
+        says("with its stars", window.player_prefs.get("stars") == [games[0]["exe"]], window.player_prefs)
+        window.close()
+        print()
+
         print("8. the source")
         says("no pygame: nothing new rides on the disc", "pygame" not in template)
         says("XInput is loaded by its full path in System32, never from the disc or the install folder",
              "GetSystemDirectoryW" in template and "os.path.join(system, name)" in template
              and "ctypes.WinDLL(path)" in template)
-        says("the keyboard's place shows: focus looks like hover, on the big buttons and the quiet lines",
-             template.count("QPushButton:hover, QPushButton:focus {") == 2)
+        says("the keyboard's place shows: focus looks like hover, on the big buttons, the quiet lines and the "
+             "Sound button", template.count("QPushButton:hover, QPushButton:focus {") == 3)
         says("no \"?\" on any dialog the menu opens", "AA_DisableWindowContextHelpButton" in template
              and template.index("AA_DisableWindowContextHelpButton") < template.index("app = QtWidgets.QApplication(sys.argv)"))
         says("a preview never keeps a language either",

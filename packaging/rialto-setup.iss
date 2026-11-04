@@ -2,7 +2,7 @@
 ;
 ; Built with the Inno Setup 6.5.4 that Rialto itself carries (helpers\inno\ISCC.exe):
 ;
-;   ISCC.exe /Q /DPackageDir="<the Rialto 1.5.1 Disc Maker folder>" /DAppVersion=1.5.1
+;   ISCC.exe /Q /DPackageDir="<the Rialto 1.5.2 Disc Maker folder>" /DAppVersion=1.5.2
 ;            /DIconFile="assets\bird_icon.ico" /O"<output folder>" packaging\rialto-setup.iss
 ;
 ; A signed build passes the signing command too, after Rialto.exe itself is signed, and Inno signs the
@@ -34,9 +34,9 @@
 
 #define AppId "CB8B5DDB-EE8E-42C5-BCB1-457E8DC81CEE"
 
-; The shortcuts' name, the version's: "Rialto 1.5.1" in the Start Menu and on the desktop (his ruling,
-; 19 Oct 2026). 1.5.1 is the first Setup, so nothing older to remove; from 1.5.2 on, a Setup removes the
-; earlier version's shortcuts that point at this install's Rialto.exe.
+; The shortcuts' name, the version's: "Rialto 1.5.2" in the Start Menu and on the desktop (his ruling,
+; 19 Oct 2026). An upgrade removes the earlier version's shortcuts that point at this install's Rialto.exe
+; (RemoveEarlierShortcuts, in [Code]), so "Rialto 1.5.1" does not stay beside the new one.
 #ifndef ShortcutName
   #define ShortcutName "Rialto " + AppVersion
 #endif
@@ -110,6 +110,11 @@ SignedUninstaller=yes
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Messages]
+; Inno's own sentence names %1, the AppName, "Rialto 1.5.2"; the Rialto that is open is usually the
+; version this Setup replaces. Said without the version.
+SetupAppRunningError=Rialto is open.%n%nClose Rialto, then click OK to continue, or Cancel to exit Setup.
+
 [CustomMessages]
 english.ProtectedFolder=Rialto keeps its settings, profiles, input and output in the folder it is installed in, so it needs a folder you can write to.%n%n%1 is inside a protected Windows folder.%n%nGo back and choose a folder of your own, such as %2.
 english.KeptYourFiles=Rialto is removed.%n%nYour settings, profiles, input and output are still in:%n%1%n%nDelete that folder yourself when you no longer need them.
@@ -174,6 +179,66 @@ end;
 function WantShortcuts: Boolean;
 begin
   Result := not HasSwitch('/NOSHORTCUTS');
+end;
+
+{ True when the shortcut starts this install's Rialto.exe, with nothing after it. Another copy of Rialto
+  (a portable folder, Rialto 2) keeps its own shortcuts. }
+function StartsThisRialto(const Link: String): Boolean;
+var
+  Shell, Shortcut: Variant;
+  Target, Arguments: String;
+begin
+  Result := False;
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Shortcut := Shell.CreateShortcut(Link);
+    Target := Shortcut.TargetPath;
+    Arguments := Shortcut.Arguments;
+    Result := (CompareText(Target, ExpandConstant('{app}\Rialto.exe')) = 0) and (Trim(Arguments) = '');
+  except
+  end;
+end;
+
+{ Each version names its shortcuts for itself, so an upgrade would leave "Rialto 1.5.1" beside
+  "Rialto 1.5.2". Removed: the earlier names, "Rialto 1.x" and the plain "Rialto" that Rialto's own
+  desktop shortcut once had, only when they start this install's Rialto.exe. }
+procedure RemoveEarlierShortcuts(const Dir: String);
+var
+  F: TFindRec;
+  Earlier: TStringList;
+  I: Integer;
+begin
+  Earlier := TStringList.Create;
+  try
+    if FindFirst(AddBackslash(Dir) + 'Rialto*.lnk', F) then
+      try
+        repeat
+          if (CompareText(F.Name, '{#ShortcutName}.lnk') <> 0) and
+             ((CompareText(F.Name, 'Rialto.lnk') = 0) or (Pos('RIALTO 1.', Uppercase(F.Name)) = 1)) and
+             StartsThisRialto(AddBackslash(Dir) + F.Name) then
+            Earlier.Add(AddBackslash(Dir) + F.Name);
+        until not FindNext(F);
+      finally
+        FindClose(F);
+      end;
+    for I := 0 to Earlier.Count - 1 do
+      if DeleteFile(Earlier[I]) then
+        Log('Removed the earlier shortcut ' + Earlier[I])
+      else
+        Log('Could not remove the earlier shortcut ' + Earlier[I]);
+  finally
+    Earlier.Free;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { After [Icons] has made this version's shortcuts. /NOSHORTCUTS, the release check's throwaway install,
+    never touches the real ones. }
+  if (CurStep = ssPostInstall) and WantShortcuts then begin
+    RemoveEarlierShortcuts(ExpandConstant('{autoprograms}'));
+    RemoveEarlierShortcuts(ExpandConstant('{autodesktop}'));
+  end;
 end;
 
 function IsUnder(const Dir, Root: String): Boolean;

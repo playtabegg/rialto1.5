@@ -83,7 +83,7 @@ def _xml(value):
 
 def safe_version(version):
     """MSIX wants a four-part numeric version and rejects anything else."""
-    parts = re.findall(r"\d+", str(version or ""))[:4]
+    parts = re.findall(r"[0-9]+", str(version or ""))[:4]  # not \d: other scripts' digits are not MSIX's
     parts = [p[:5] for p in parts] or ["1"]
     while len(parts) < 4:
         parts.append("0")
@@ -109,7 +109,8 @@ def _make_square_png(source_image, size, dest_path):
 
 
 def build_msix(game_dir, title, publisher_dn, publisher_display, version,
-               executable_rel, art_path, out_msix, status=print):
+               executable_rel, art_path, out_msix, status=print, timeout=1800, run=None,
+               identity_title=None):
     """
     Package game_dir as an .msix. Returns (success, message).
 
@@ -117,6 +118,15 @@ def build_msix(game_dir, title, publisher_dn, publisher_display, version,
     art_path: png or ico used to generate the tile art (optional).
     publisher_dn: e.g. 'CN=Jane Smith' - must exactly match the signing
                   certificate subject for the package to install when signed.
+    timeout: seconds MakeAppx may take, or None for no limit (Rialto's
+             No time limit box, 1.5.2).
+    run: run(command, timeout) in place of subprocess.run, handing back what
+         it would and raising subprocess.TimeoutExpired as it does. Rialto
+         passes one that keeps its window answering while MakeAppx packs.
+    identity_title: what the package's Identity is made from, when it is not
+                    `title`. Rialto passes the Game Title as typed, so a
+                    package once named "Moth Lamp (PC CD)" keeps its identity
+                    while its display name becomes "Moth Lamp" (4 Nov 2026).
     """
     makeappx = find_makeappx()
     if not makeappx:
@@ -148,7 +158,7 @@ def build_msix(game_dir, title, publisher_dn, publisher_display, version,
         _make_square_png(source_image, 50, os.path.join(assets_dir, "StoreLogo.png"))
 
         manifest = XML_TEMPLATE.format(
-            identity=_xml(safe_identity(title)),
+            identity=_xml(safe_identity(identity_title or title)),
             publisher=_xml(publisher_dn),
             version=safe_version(version),
             display_name=_xml(title),
@@ -162,18 +172,23 @@ def build_msix(game_dir, title, publisher_dn, publisher_display, version,
         status("Packing with MakeAppx (this can take a minute on big games)...")
         if os.path.exists(out_msix):
             os.remove(out_msix)
-        result = subprocess.run(
-            [makeappx, "pack", "/o", "/d", package_root, "/p", out_msix],
-            capture_output=True, text=True, timeout=1800,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        )
+        command = [makeappx, "pack", "/o", "/d", package_root, "/p", out_msix]
+        if run is not None:
+            result = run(command, timeout)
+        else:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=timeout,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
         if result.returncode != 0 or not os.path.exists(out_msix):
             output = (result.stdout or "") + (result.stderr or "")
             tail = output.strip().splitlines()[-1] if output.strip() else "unknown error"
             return False, f"MakeAppx failed: {tail}"
         return True, f"Created {os.path.basename(out_msix)}"
-    except subprocess.TimeoutExpired:
-        return False, "MakeAppx timed out after 30 minutes"
+    except subprocess.TimeoutExpired as error:
+        minutes = round(error.timeout / 60)
+        return False, ("MakeAppx timed out after %d minutes. A very large game can need more than %d minutes "
+                       "to pack its .msix. Tick No time limit and export again" % (minutes, minutes))
     except Exception as e:
         return False, f"MSIX packaging error: {e}"
     finally:

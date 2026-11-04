@@ -143,6 +143,7 @@ def main():
                      installer_compiler=lambda: (iscc, carried), tool_words=words_ns['tool_words'],
                      _inno_setup_major=lambda path: 7 if "Inno Setup 7" in str(path) else 6)
             h.sign_final_build = Var(False)
+            h.tool_time_limit = lambda seconds: seconds  # No time limit unticked (1.5.2)
             # ISCC runs watched since 1.5.1 (B6); here the watch is the fake run itself.
             h.tree_size = lambda path, skip_ext=(".iso",): (0, 0)
             h.run_tool_watched = lambda command, cwd, timeout, step, on_line=None, watch=None: \

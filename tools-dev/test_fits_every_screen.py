@@ -239,6 +239,7 @@ for _named_by_its_text in ("step_frame", "meta_frame", "disc_frame", "art_frame"
 DIALOGS = [
     {"name": "Games on Disc", "open": "configure_game_exes", "expect": "Games on Disc", "dark": True},
     {"name": "Disc Extras", "open": "configure_disc_extras", "expect": "Disc Extras", "dark": True},
+    {"name": "Menu Font and Colors", "open": "configure_menu_theme", "expect": "Font and Colors", "dark": True},
     {"name": "Files to Place on the PC", "open": "configure_placed_files", "expect": "Files to Place on the PC",
      "dark": True},
     {"name": "Build Queue", "open": "configure_build_queue", "expect": "Build Queue", "dark": True},
@@ -283,6 +284,7 @@ READ_FROM = [
      "Developed by Jane Smith Games 2026. Published by Mock Publishing. All rights reserved.", "The copyright line"),
     ("Disc Name:", "DiscName", "LANTERNS_DEEP", "The label players see in File Explorer"),
     ("Menu Background:", "Background", _ART + "menu_background.gif", "The background for your disc's menu"),
+    ("Menu Music:", "MenuMusic", _ART + "menu_theme.wav", "A WAV file that loops under the menu"),
     ("Game Logo (.png):", "Logo", _ART + "lanterns_logo.png", "Your game's logo"),
     ("Company Logo (.png):", "CompanyLogo", _ART + "jane_smith_games.png", "Your studio or company logo"),
     ("Game Icon (.ico):", "Icon", _ART + "lanterns.ico", "The icon for your installer"),
@@ -292,8 +294,10 @@ READ_FROM = [
 # words: each with the variable of RialtoApp's it must still be on.
 PICKED_FROM = [("Games on Disc:", 0, "game_exes_summary_var"), ("Target Media:", 0, "target_media_var"),
                ("Target Media:", 1, "compression_var")]
-TICKED = [("Pressed", "pressed_disc_var"), ("Also export for USB", "usb_export_var"),
-          ("Sign Final Build", "sign_final_build"), ("Remove WTI Branding", "remove_wti_branding")]
+TICKED = [("Pressed", "pressed_disc_var"), ("Hide the menu's title and logo", "bg_has_title_var"),
+          ("Also export for USB", "usb_export_var"),
+          ("Sign Final Build", "sign_final_build"), ("No time limit", "no_time_limit"),
+          ("Remove WTI Branding", "remove_wti_branding")]
 
 # Every function in Rialto.pyw that makes a window (tk.Toplevel or themed_dialog)
 # must be the "open" or "over" of a row above, be opened as a tooltip, or be
@@ -310,7 +314,12 @@ SCROLLING_BOXES = {"Text", "Listbox", "Treeview"}  # and a Canvas that has a scr
 SCROLLS_ACROSS = {"Entry", "TEntry", "TCombobox", "Spinbox", "TSpinbox"}
 
 # Pinned on release/1.5.1 after 804bac1 (19 Oct 2026, evening: the three-steps card folded on every
-# screen, Build Queue beside Browse, Add Games) by this harness (--pins), at 96 DPI on a
+# screen, Build Queue beside Browse, Add Games), and again on 1.5.2 (3 Nov 2026: Hide the menu's title
+# and logo and Font and Colors... on the Menu Background row, the Menu Font and Colors dialog, and the
+# No time limit box beside Sign Final Build, which moved Remove WTI Branding right; Disc Extras with Steam in
+# a third column), measured again on the four merged together (nothing moved), and again for the Menu
+# Music row under Menu Background (Step 4's buttons now as tall as their boxes, so the row costs 4 lines)
+# by this harness (--pins), at 96 DPI on a
 # 1440-line screen: the window, what the page asks for with the three-steps
 # card open and folded, where each part of the page sits (top, height), every
 # widget of the page (name, the box it is in, left, top, width, height, and 1
@@ -318,8 +327,8 @@ SCROLLS_ACROSS = {"Entry", "TEntry", "TCombobox", "Spinbox", "TSpinbox"}
 # as a person sees it, title bar included.
 PINNED = {
     "window": [700, 1200],
-    "page_open": 1128,
-    "page_folded": 1005,
+    "page_open": 1132,
+    "page_folded": 1009,
     "parts": {
         "title_bar": [0, 26],
         "menu_bar": [26, 25],
@@ -328,13 +337,14 @@ PINNED = {
         "step_frame": [136, 64],
         "meta_frame": [208, 227],
         "disc_frame": [443, 97],
-        "art_frame": [548, 217],
-        "status_text": [775, 267],
+        "art_frame": [548, 221],
+        "status_text": [779, 263],
         "export_bar": [1050, 150],
     },
     "dialogs": {
         "Games on Disc": [822, 586],
-        "Disc Extras": [1182, 668],
+        "Disc Extras": [1222, 617],  # 1.5.2: Steam in a third column, its art rows showing (was 1182 x 668)
+        "Menu Font and Colors": [642, 474],
         "Files to Place on the PC": [802, 515],
         "Build Queue": [862, 507],
         "Configure Code Signing": [642, 772],
@@ -348,9 +358,9 @@ PINNED = {
     "census": [
         ('the title strip', '', 0, 0, 700, 26, 0),
         ('a picture or an empty label', '', 6, 3, 20, 20, 0),
-        ('the words "Rialto 1.5.1"', '', 42, 1, 75, 23, 0),
-        ('the "X" button beside "Rialto 1.5.1"', '', 675, 0, 17, 26, 0),
-        ('the "?" button beside "Rialto 1.5.1"', '', 656, 0, 15, 26, 0),
+        ('the words "Rialto 1.5.2"', '', 42, 1, 75, 23, 0),
+        ('the "X" button beside "Rialto 1.5.2"', '', 675, 0, 17, 26, 0),
+        ('the "?" button beside "Rialto 1.5.2"', '', 656, 0, 15, 26, 0),
         ('the menu strip', '', 0, 26, 700, 25, 0),
         ('the "File" button', '', 0, 26, 43, 25, 0),
         ('the "Disc" button', '', 43, 26, 48, 25, 0),
@@ -374,7 +384,8 @@ PINNED = {
         ('the "Also export for USB" row', '', 14, 1158, 672, 30, 0),
         ('the "Also export for USB" tick box', '', 14, 1162, 126, 21, 0),
         ('the "Sign Final Build" tick box', '', 158, 1162, 106, 21, 0),
-        ('the "Remove WTI Branding" tick box', '', 282, 1162, 143, 21, 0),
+        ('the "No time limit" tick box', '', 282, 1162, 95, 21, 0),
+        ('the "Remove WTI Branding" tick box', '', 395, 1162, 143, 21, 0),
         ('the "Restore page" button', '', 579, 1158, 107, 30, 0),
         ('the page', '', 10, 59, 680, 991, 0),
         ('the three-steps card', '', 10, 59, 680, 31, 0),
@@ -429,28 +440,34 @@ PINNED = {
         ('the box beside "Target Media:"', '"Step 3: the disc"', 425, 508, 101, 21, 0),
         ('the "Pressed" tick box', '"Step 3: the disc"', 534, 508, 65, 21, 0),
         ('the "Disc Extras" button beside "Target Media:"', '"Step 3: the disc"', 605, 505, 76, 28, 0),
-        ('"Step 4: artwork"', '', 10, 548, 680, 217, 0),
-        ('the "Menu Background:" row', '"Step 4: artwork"', 15, 568, 670, 32, 0),
-        ('the words "Menu Background:"', '"Step 4: artwork"', 15, 574, 142, 19, 0),
-        ('the box beside "Menu Background:"', '"Step 4: artwork"', 161, 572, 445, 23, 0),
-        ('the "Browse" button beside "Menu Background:"', '"Step 4: artwork"', 606, 570, 75, 28, 0),
-        ('the "Game Logo (.png):" row', '"Step 4: artwork"', 15, 608, 670, 32, 0),
-        ('the words "Game Logo (.png):"', '"Step 4: artwork"', 15, 614, 142, 19, 0),
-        ('the box beside "Game Logo (.png):"', '"Step 4: artwork"', 161, 612, 445, 23, 0),
-        ('the "Browse" button beside "Game Logo (.png):"', '"Step 4: artwork"', 606, 610, 75, 28, 0),
-        ('the "Company Logo (.png):" row', '"Step 4: artwork"', 15, 648, 670, 32, 0),
-        ('the words "Company Logo (.png):"', '"Step 4: artwork"', 15, 654, 142, 19, 0),
-        ('the box beside "Company Logo (.png):"', '"Step 4: artwork"', 161, 652, 445, 23, 0),
-        ('the "Browse" button beside "Company Logo (.png):"', '"Step 4: artwork"', 606, 650, 75, 28, 0),
-        ('the "Game Icon (.ico):" row', '"Step 4: artwork"', 15, 688, 670, 32, 0),
-        ('the words "Game Icon (.ico):"', '"Step 4: artwork"', 15, 694, 142, 19, 0),
-        ('the box beside "Game Icon (.ico):"', '"Step 4: artwork"', 161, 692, 445, 23, 0),
-        ('the "Browse" button beside "Game Icon (.ico):"', '"Step 4: artwork"', 606, 690, 75, 28, 0),
-        ('the "Disc Icon (.ico):" row', '"Step 4: artwork"', 15, 728, 670, 32, 0),
-        ('the words "Disc Icon (.ico):"', '"Step 4: artwork"', 15, 734, 142, 19, 0),
-        ('the box beside "Disc Icon (.ico):"', '"Step 4: artwork"', 161, 732, 445, 23, 0),
-        ('the "Browse" button beside "Disc Icon (.ico):"', '"Step 4: artwork"', 606, 730, 75, 28, 0),
-        ('the log', '', 12, 775, 676, 267, 0),
+        ('"Step 4: artwork"', '', 10, 548, 680, 221, 0),
+        ('the "Menu Background:" row', '"Step 4: artwork"', 15, 568, 670, 26, 0),
+        ('the words "Menu Background:"', '"Step 4: artwork"', 15, 571, 142, 19, 0),
+        ('the box beside "Menu Background:"', '"Step 4: artwork"', 161, 569, 138, 23, 0),
+        ('the "Browse" button beside "Menu Background:"', '"Step 4: artwork"', 299, 568, 71, 26, 0),
+        ('the "Hide the menu\'s title and logo" tick box', '"Step 4: artwork"', 380, 570, 185, 21, 0),
+        ('the "Font and Colors..." button beside "Menu Background:"', '"Step 4: artwork"', 571, 568, 110, 26, 0),
+        ('the "Menu Music:" row', '"Step 4: artwork"', 15, 602, 670, 26, 0),
+        ('the words "Menu Music:"', '"Step 4: artwork"', 15, 605, 142, 19, 0),
+        ('the box beside "Menu Music:"', '"Step 4: artwork"', 161, 603, 449, 23, 0),
+        ('the "Browse" button beside "Menu Music:"', '"Step 4: artwork"', 610, 602, 71, 26, 0),
+        ('the "Game Logo (.png):" row', '"Step 4: artwork"', 15, 636, 670, 26, 0),
+        ('the words "Game Logo (.png):"', '"Step 4: artwork"', 15, 639, 142, 19, 0),
+        ('the box beside "Game Logo (.png):"', '"Step 4: artwork"', 161, 637, 449, 23, 0),
+        ('the "Browse" button beside "Game Logo (.png):"', '"Step 4: artwork"', 610, 636, 71, 26, 0),
+        ('the "Company Logo (.png):" row', '"Step 4: artwork"', 15, 670, 670, 26, 0),
+        ('the words "Company Logo (.png):"', '"Step 4: artwork"', 15, 673, 142, 19, 0),
+        ('the box beside "Company Logo (.png):"', '"Step 4: artwork"', 161, 671, 449, 23, 0),
+        ('the "Browse" button beside "Company Logo (.png):"', '"Step 4: artwork"', 610, 670, 71, 26, 0),
+        ('the "Game Icon (.ico):" row', '"Step 4: artwork"', 15, 704, 670, 26, 0),
+        ('the words "Game Icon (.ico):"', '"Step 4: artwork"', 15, 707, 142, 19, 0),
+        ('the box beside "Game Icon (.ico):"', '"Step 4: artwork"', 161, 705, 449, 23, 0),
+        ('the "Browse" button beside "Game Icon (.ico):"', '"Step 4: artwork"', 610, 704, 71, 26, 0),
+        ('the "Disc Icon (.ico):" row', '"Step 4: artwork"', 15, 738, 670, 26, 0),
+        ('the words "Disc Icon (.ico):"', '"Step 4: artwork"', 15, 741, 142, 19, 0),
+        ('the box beside "Disc Icon (.ico):"', '"Step 4: artwork"', 161, 739, 449, 23, 0),
+        ('the "Browse" button beside "Disc Icon (.ico):"', '"Step 4: artwork"', 610, 738, 71, 26, 0),
+        ('the log', '', 12, 779, 676, 263, 0),
     ],
 }
 

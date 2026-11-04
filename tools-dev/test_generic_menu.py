@@ -268,6 +268,7 @@ print()
 
 # --------------------------------------------------------------------------
 print("4. build_menu_config and the staging of menu.exe")
+import store_title_stub  # noqa: E402
 # strip_wti_mentions is a module function build_menu_config calls, so the host
 # needs the real one rather than a stand-in.
 _wti_ns = {"re": __import__("re")}
@@ -276,10 +277,12 @@ exec(module_funcs(RIALTO_SRC, ["strip_wti_mentions", "sanitize_text", "split_lau
      _wti_ns)
 
 cfg_host = host_from(
-    methods(RIALTO_SRC, "RialtoApp", ["build_menu_config", "write_menu_config"]),
+    methods(RIALTO_SRC, "RialtoApp", ["build_menu_config", "write_menu_config",
+                                       "menu_theme_config", "menu_theme_font"]),
     {"strip_wti_mentions": _wti_ns["strip_wti_mentions"],
      "sanitize_text": _wti_ns["sanitize_text"],
-     "split_launch_args": _wti_ns["split_launch_args"]},
+     "split_launch_args": _wti_ns["split_launch_args"],
+     **store_title_stub.namespace(RIALTO_SRC)},
     entries={"Title": Flag("  Marlow's Escape  ")},
     company_logo_var=Flag(""),
     publisher_text_var=Flag("(c) 2026 Mock Studio"),

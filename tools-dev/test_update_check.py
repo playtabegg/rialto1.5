@@ -140,6 +140,22 @@ check(out.sentence == "The release feed is not signed by We The Indies.", "tampe
 praw, psig = feed_for(signer, app="otherapp")
 out = check_for_update("1.5.0", endpoints=ends, pubs=pubs, fetch=fetcher(praw, psig))
 check("different program" in out.sentence, "another program's feed was accepted by Rialto")
+# Plain digits only (1.5.2): \d would also take another script's digits, here Arabic-Indic and Devanagari,
+# and a superscript passed isdigit() and then broke int() in the comparison.
+for odd in ("\u0661.\u0666.\u0660", "1.\u096c.0", "1.6.\u0660", "1.6.0\uff10"):
+    oraw, osig = feed_for(signer, version=odd)
+    out = check_for_update("1.5.0", endpoints=ends, pubs=pubs, fetch=fetcher(oraw, osig))
+    check(out.sentence == "The release feed names a version this Rialto does not read.",
+          "a feed version in other digits was read: %a -> %a" % (odd, out.sentence))
+from rialto.update._semver import vercmp  # noqa: E402
+try:
+    check(vercmp("1.6.\u00b2", "1.5.2") == 1 and vercmp("1.5.\u0662", "1.5.0") == 0,
+          "vercmp read a digit from another script")
+except ValueError as error:
+    check(False, "vercmp raised on a superscript digit: %a" % str(error))
+from rialto.msix_export import safe_version  # noqa: E402
+check(safe_version("1.\u0662.3") == "1.3.0.0", "the MSIX version took a digit from another script: %a" % safe_version("1.\u0662.3"))
+
 hraw, hsig = feed_for(signer, platforms={"windows-x86_64": {"url": "https://evil.example/Rialto.exe", "signature": "x", "sha256": "0" * 64, "size": 1, "installer": "inno", "args": []}})
 out = check_for_update("1.5.0", endpoints=ends, pubs=pubs, fetch=fetcher(hraw, hsig))
 check("does not fetch from" in out.sentence, "a stranger's host was accepted")

@@ -107,8 +107,9 @@ class FakeSigner:
         self.succeeds = succeeds
         self.signed = []
 
-    def __call__(self, file_path, status=print):
+    def __call__(self, file_path, status=print, timeout=300):
         self.signed.append(os.path.abspath(file_path))
+        self.timeout = timeout
         if not self.succeeds:
             return False, "signtool failed: fake refusal"
         with open(file_path, "ab") as f:
@@ -308,10 +309,11 @@ print("4. the Sign Final Build gate and the failure path")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import progress_stub  # noqa: E402
 # The signature is made with the window answering since 1.5.1 (B6).
-hook_src = methods(RIALTO_SRC, "RialtoApp", ["sign_staged_menu_exe"]) + "\n\n" + progress_stub.methods(RIALTO_SRC)
+hook_src = (methods(RIALTO_SRC, "RialtoApp", ["sign_staged_menu_exe", "tool_time_limit"]) + "\n\n"
+            + progress_stub.methods(RIALTO_SRC))
 
 
-def run_hook(sign_final, configured, signer):
+def run_hook(sign_final, configured, signer, no_time_limit=True):
     base = tempfile.mkdtemp(prefix="rialto_hook_")
     menu = os.path.join(base, "menu")
     os.makedirs(menu)
@@ -323,6 +325,7 @@ def run_hook(sign_final, configured, signer):
     log = []
     host.update_status = log.append
     host.sign_final_build = Flag(sign_final)
+    host.no_time_limit = Flag(no_time_limit)
     try:
         result = with_signing(configured, signer, lambda: host.sign_staged_menu_exe(menu))
     finally:
@@ -347,6 +350,11 @@ signer = FakeSigner()
 result, log = run_hook(sign_final=True, configured=True, signer=signer)
 check("ticked and configured -> signed", result, True)
 check("exactly one signature, on the staged copy", [os.path.basename(p) for p in signer.signed], ["menu.exe"])
+# The readiness review (4 Nov): No time limit ticked lifted every limit but menu.exe's 5 minutes.
+check("with No time limit ticked, the signature has no time limit", signer.timeout, None)
+signer = FakeSigner()
+run_hook(sign_final=True, configured=True, signer=signer, no_time_limit=False)
+check("unticked, it stops after 5 minutes", signer.timeout, 300)
 ok("the log says whose signature it is", any("your own account" in m for m in log), str(log))
 
 signer = FakeSigner(succeeds=False)
@@ -356,7 +364,7 @@ ok("and it is a warning, because an attempt did fail",
    any(m.startswith("⚠️") for m in log), str(log))
 
 
-def exploding_signer(file_path, status=print):
+def exploding_signer(file_path, status=print, timeout=300):
     raise RuntimeError("azure fell over")
 
 

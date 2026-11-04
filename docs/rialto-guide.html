@@ -381,7 +381,7 @@ code, kbd {
   <header class="masthead">
     <div class="disc" aria-hidden="true"></div>
     <div>
-      <p class="kicker">We the Indies &middot; Disc Builder &middot; Version 1.5.1</p>
+      <p class="kicker">We the Indies &middot; Disc Builder &middot; Version 1.5.2</p>
       <h1>Rialto<em>.</em></h1>
       <p class="standfirst">Your finished Windows game goes in. A disc image comes out,
       with a menu, an installer, an icon and everything a boxed copy needs.</p>
@@ -512,7 +512,7 @@ code, kbd {
     <caption>What each box does, and what fills it in for you</caption>
     <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
     <tbody>
-      <tr><td>Game Title</td><td>What players see on the installer and the disc menu. Typing it also fills in Start Menu Name and Disc Name.</td></tr>
+      <tr><td>Game Title</td><td>What players see on the installer and the disc menu. Typing it also fills in Start Menu Name and Disc Name. A store's format at the end, like (PC CD), stays off the shortcuts, Setup and the disc, because it is for the store page.</td></tr>
       <tr><td>Developer</td><td>You, your studio, or your team.</td></tr>
       <tr><td>Publisher</td><td>Only if somebody else is publishing. Leave it empty and the copyright line follows Developer instead.</td></tr>
       <tr><td>Start Menu Name</td><td>The name in the Windows Start Menu. Follows the title until you type your own.</td></tr>
@@ -537,6 +537,9 @@ code, kbd {
     <thead><tr><th style="width:11rem">Field</th><th>What it is</th></tr></thead>
     <tbody>
       <tr><td>Menu Background</td><td>The disc menu's backdrop. An animated GIF is the sweet spot: it loops, it is small, and <code>ezgif.com</code> makes one out of a video clip in a minute.</td></tr>
+      <tr><td>Hide the menu's title and logo</td><td>Beside Menu Background. Tick it when your background has the game's name or logo drawn in. The menu then leaves the picture as it is: no dark shading, no game title or Game Logo on top, and the buttons sit at the foot of the column. The Company Logo stays in its corner; leave Company Logo empty to show none. A soft dark edge around the words keeps them readable on a bright picture.</td></tr>
+      <tr><td>Font and Colors</td><td>Beside Menu Background: the words on the disc menu. Pick a <code>.ttf</code> or <code>.otf</code> font, and Rialto reads the name the menu loads it under and says when the menu cannot use it. A font goes on the disc only with its license: Rialto takes the <code>OFL.txt</code> beside the font, or the license you pick, and with no license the menu keeps its own font. Then the colors of the words, of the chosen item and of the quiet lines (the games under Play Games, compatibility mode, Mods, Add to Steam), as <code>#</code> and six hex digits or from <b>Pick</b>; the <b>Size</b> of the words, 0.8 to 1.5; and, with the title in your background, the <b>Top line</b>: the highest the buttons reach, 0 to 500 pixels down the 1280x720 menu. When a disc has too many buttons for the room under the Top line, the build says so. Leave a box empty and the menu keeps its own look for it. Save Profile keeps all of it with the game.</td></tr>
+      <tr><td>Menu Music</td><td>Under Menu Background. A WAV file that loops under the menu. It stops while the game or Setup runs, and while the player is in another window, and starts again when they are back. Players can turn it off with the Sound button in the menu's top corner, and the menu remembers their choice on their PC. Windows plays the music itself, so it must be a PCM WAV: Rialto says so when a WAV is compressed or float (such as 32-bit float), and most audio programs export a 16-bit PCM WAV. The disc carries the WAV twice, for the menu on the disc and inside the installer. The menu's copy is kept as it is. The installer compresses its copy on Balanced and Smallest disc, and keeps it as it is on Fastest install. Rialto says what a large one adds. Optional: a disc without music is quiet and has no Sound button.</td></tr>
       <tr><td>Game Logo</td><td>Front and center on the menu. Transparent PNG.</td></tr>
       <tr><td>Company Logo</td><td>Bottom corner of the menu. Small transparent PNG, around 150x75.</td></tr>
       <tr><td>Game Icon</td><td>The installer, the Start Menu entry, the desktop shortcut. A 256x256 .ico.</td></tr>
@@ -572,7 +575,29 @@ code, kbd {
       <h3>Steam</h3>
       <p>After players install, the menu can offer one click to add the game to their Steam
       library as a non-Steam game. If Steam is open, the menu asks them to exit it completely and
-      press the button again.</p>
+      press the button again. When the game is already in Steam, from an earlier disc, the button
+      updates its pictures from this disc. The Shortcut Icon changes only when the earlier disc gave
+      one of the same kind, .ico or .png.</p>
+      <p>Ticking the box shows a row for each picture Steam shows for the game, under Steam's own
+      names, with <b>Browse</b> beside each. Every row is optional: leave one empty and Rialto makes
+      that picture from your menu background and Game Logo, as it always has. Rialto takes each
+      picture at the size you made it: Steam's own size, its half-size, its older sizes or any
+      other. When a picture is another shape from Steam's, the build's log gives its size beside
+      Steam's, and the build goes on. An animated PNG or WebP keeps up to 1,000 frames, and 250 at
+      3840 x 1240; past that, and for an animated GIF, Steam gets its first frame, and the log says so.
+      When Rialto cannot read or write a file you give, the log says why and Rialto makes that picture
+      from your menu background and Game Logo; for the Shortcut Icon, the shortcut keeps your Game
+      Icon.</p>
+      <table>
+        <thead><tr><th>Row</th><th>What to give it</th></tr></thead>
+        <tbody>
+          <tr><td>Library Capsule</td><td>The portrait card art in the library and on the Home page's Recent Games. Steam's size is 600 x 900; the half-size 300 x 450 and other sizes are taken too. PNG, JPG or WebP. Only the game's title on it.</td></tr>
+          <tr><td>Library Header</td><td>The wide picture Steam shows for the game played last on Recent Games. Steam's size is 920 x 430, the size of a store page's Header Capsule; the older 460 x 215 and other sizes are taken too. PNG, JPG or WebP.</td></tr>
+          <tr><td>Library Hero</td><td>The background across the top of the game's library page. Steam's size is 3840 x 1240; the half-size 1920 x 620 and other sizes are taken too. PNG, JPG or WebP, no words. Steam crops its edges, the top and bottom as well as the sides, so keep what matters in the middle 860 x 380.</td></tr>
+          <tr><td>Library Logo</td><td>The logo Steam draws over the Library Hero. Steam's size is 1280 wide or 720 tall, a PNG with a transparent background; the older 1280 x 720 and 640 x 360 and other sizes are taken too, and a WebP works. A logo with no transparent background is taken, and Steam shows its background.</td></tr>
+          <tr><td>Shortcut Icon</td><td>The small icon beside the game in the library's list. Steam's size is 256 x 256 or 512 x 512, .ico or .png; the older 32 x 32 and other sizes are taken too, and an .ico goes with every size in it. Empty, the shortcut uses your Game Icon.</td></tr>
+        </tbody>
+      </table>
 
       <h3>Mac and Linux</h3>
       <p>Only if you built them. Point at a plain build folder, the one you would have zipped
@@ -621,8 +646,8 @@ code, kbd {
   </div>
 
   <h3 id="compression">Compression</h3>
-  <p>The <b>Compression</b> box on the Target Media row sets how hard the installer squeezes
-  your game. <b>Balanced</b> suits most games. <b>Smallest disc</b> squeezes hardest: a
+  <p>The <b>Compression</b> box on the Target Media row sets how much the installer compresses
+  your game. <b>Balanced</b> suits most games. <b>Smallest disc</b> compresses it the most: a
   smaller disc and a slower build. <b>Fastest install</b> stores the game as it is, so setup
   only copies it. That can mean more discs, and the size estimate becomes exact. Most modern
   games are already compressed inside, so storing them often costs little.</p>
@@ -691,6 +716,10 @@ code, kbd {
       <tr>
         <td>A ZIP instead of an ISO</td>
         <td>Every disc image tool Rialto tried failed. The log names each one and what went wrong. Check free disk space and that no scanner is holding the build folder, then build again.</td>
+      </tr>
+      <tr>
+        <td>A step stopped after an hour, or after 30 minutes</td>
+        <td><b>No time limit</b>, beside <b>Sign Final Build</b>, starts ticked, so each step runs until it finishes, the line under the log keeps counting, and closing Rialto still stops it. If it was unticked, Rialto stops making the installer and unpacking a GOG installer after an hour, writing the disc image and packing an .msix after 30 minutes, and signing setup.exe, menu.exe or an .msix after 5 minutes. A very large game can need more than those times: tick <b>No time limit</b> and build again.</td>
       </tr>
       <tr>
         <td>The disc menu says the game executable was not found</td>
@@ -772,7 +801,7 @@ code, kbd {
   </div>
 
   <div class="colophon">
-    <span><strong>Rialto 1.5.1</strong> &middot; Built by Chandler at We the Indies&trade; &middot; MIT licensed &middot; wetheindies.com</span>
+    <span><strong>Rialto 1.5.2</strong> &middot; Built by Chandler at We the Indies&trade; &middot; MIT licensed &middot; wetheindies.com</span>
     <span>Keep physical media alive.</span>
   </div>
 </section>

@@ -69,15 +69,23 @@ def verify_signature(file_path):
         return f"verification error: {e}"
 
 
-def is_signed(file_path):
-    """True if `file_path` carries a signature Windows would accept."""
+def is_signed(file_path, timeout=60, run=None):
+    """True if `file_path` carries a signature Windows would accept.
+
+    `timeout` is the seconds signtool may take to read it, or None for no limit.
+    `run(command, timeout)`, when given, runs signtool instead of subprocess.run,
+    so a read with no limit can be held and stopped by closing Rialto.
+    """
     signtool_path = _signtool()
     if not signtool_path or not os.path.exists(file_path):
         return None  # unknown, which is not the same as unsigned
     try:
-        result = subprocess.run([signtool_path, "verify", "/pa", file_path],
-                                capture_output=True, text=True, timeout=60,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        command = [signtool_path, "verify", "/pa", file_path]
+        if run is not None:
+            result = run(command, timeout)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return result.returncode == 0
     except Exception:
         return None

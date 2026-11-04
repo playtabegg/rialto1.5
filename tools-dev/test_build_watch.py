@@ -127,9 +127,10 @@ ok("the page is let go however the build ends", "finally:" in run and "self.hold
 ok("the log is never held", "if w is not getattr(self, \"status_text\", None)" in flat)
 ok("closing mid-build asks first", '"A build is running"' in flat)
 # Since 1.5.1 one disc and each disc of a set both write through _write_one_image (its one watched call), and
-# the menu compile runs watched too: ISCC, the image writer and the menu compile are the three.
+# the menu compile runs watched too: ISCC, the image writer and the menu compile are the three. Since 1.5.2
+# run_tool_held runs it three times more, outside a build: a GOG unpack, MakeAppx and signing the .msix.
 ok("ISCC, the disc image, multi-disc images and a menu compile all run watched",
-   flat.count("self.run_tool_watched(") == 3
+   flat.count("self.run_tool_watched(") == 5 and flat.count("self.run_tool_held(") == 3
    and flat.count("self._write_one_image(") == 2 and "subprocess.run(command, cwd=output_path, capture_output=True, text=True, timeout=3600)" not in flat)
 print()
 

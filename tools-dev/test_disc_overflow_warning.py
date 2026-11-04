@@ -145,6 +145,8 @@ def build_host(src, sizes, **attrs):
         "shutil": shutil,
         "oversized_disc_warnings": load_pure(src),
     }
+    import store_title_stub
+    ns.update(store_title_stub.namespace(src))  # the multi-disc note names the game (4 Nov 2026)
     exec(f"class Host:\n{textwrap.indent(methods, '    ')}", ns)
     host = ns["Host"]()
     host.log = []
@@ -364,6 +366,40 @@ def main():
     span = method_source(src, "RialtoApp", "create_spanned_isos")
     check("create_spanned_isos no longer bails out when the base is too big",
           "don't fit the chosen disc" in span, False)
+    print()
+
+    # --- 4. the build's last line names every disc of a set (1.5.2) --------
+    print("Final result - clean_output_folder_final")
+    ns = {"os": os, "shutil": shutil, "re": __import__("re")}
+    exec("class Host:\n" + textwrap.indent(method_source(src, "RialtoApp", "clean_output_folder_final"), "    "), ns)
+    base = tempfile.mkdtemp(prefix="rialto_final_")
+    try:
+        def final_line(names):
+            out = tempfile.mkdtemp(dir=base)
+            for name, size in names:
+                with open(os.path.join(out, name), "wb") as f:
+                    f.write(b"\0" * size)
+            with open(os.path.join(out, "setup-1.bin"), "wb") as f:
+                f.write(b"x")
+            host = ns["Host"]()
+            host.log = []
+            host.update_status = host.log.append
+            host.clean_output_folder_final(out)
+            return [line for line in host.log if "Final result" in line]
+
+        MiB = 1024 * 1024
+        check("one disc: as before",
+              final_line([("Demo.iso", 3 * MiB)]),
+              ["📀 Final result: Demo.iso (3.0 MB) ready for disc burning"])
+        check("a set of two names both discs",
+              final_line([("Demo Disc 2.iso", MiB), ("Demo Disc 1.iso", 2 * MiB)]),
+              ["📀 Final result: 2 discs ready for disc burning: Demo Disc 1.iso (2.0 MB), Demo Disc 2.iso (1.0 MB)"])
+        eleven = final_line([("2048 Disc %d.iso" % n, MiB) for n in range(11, 0, -1)])
+        check("a set of eleven, in disc order (Disc 10 after Disc 9, a number in the title ignored)",
+              [part.split(" (")[0] for part in eleven[0].split("burning: ")[-1].split(", ")] if eleven else [],
+              ["2048 Disc %d.iso" % n for n in range(1, 12)])
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
     print()
 
     if failures:

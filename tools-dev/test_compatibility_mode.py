@@ -145,13 +145,15 @@ def main():
 
     # ------------------------------------------------------------------
     print("2. what build_menu_config writes into menu_config.json")
+    import store_title_stub
 
     def config_host(mode, args, hint=""):
         host = make_host(
-            methods(rialto_src, "RialtoApp", ["build_menu_config"]),
+            methods(rialto_src, "RialtoApp", ["build_menu_config", "menu_theme_config", "menu_theme_font"]),
             {"strip_wti_mentions": lambda s: s,
              "sanitize_text": build_ns["sanitize_text"],
-             "split_launch_args": split},
+             "split_launch_args": split,
+             **store_title_stub.namespace(rialto_src)},
             entries={"Title": Flag("Mock Game")},
             company_logo_var=Flag(""),
             publisher_text_var=Flag("(c) 2026"),
@@ -316,6 +318,7 @@ def main():
             translations=trans, current_lang="English")
         host.find_game_exe = lambda: (exe, [])
         host._configured_exe = lambda rel: exe
+        host.stop_music_for_good = lambda: None  # the Menu Music stops first (1.5.2): test_menu_music.py
         return host
 
     cfg = {"compat_mode": True, "compat_args": ["-opengl"]}

@@ -140,7 +140,8 @@ def parse_feed(
     if feed.get("app") != app or feed.get("channel") != channel:
         raise FeedProblem("The release feed is for a different program.")
     version = str(feed.get("version", ""))
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    # [0-9], not \d: in Python \d also matches the digits of other scripts (Arabic-Indic, Devanagari...).
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise FeedProblem("The release feed names a version this Rialto does not read.")
     block = (feed.get("platforms") or {}).get(PLATFORM)
     if not isinstance(block, dict):

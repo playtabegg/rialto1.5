@@ -6,9 +6,13 @@ The publisher only ever writes plain ``X.Y.Z``.
 
 from __future__ import annotations
 
+import re
+
 
 def parts(version: str) -> list[int]:
-    return [int(x) for x in str(version).split(".") if x.isdigit()]
+    # Plain 0 to 9 only: str.isdigit() is also true of other scripts' digits and of
+    # superscripts, which int() refuses.
+    return [int(x) for x in str(version).split(".") if re.fullmatch(r"[0-9]+", x)]
 
 
 def vercmp(a: str, b: str) -> int:

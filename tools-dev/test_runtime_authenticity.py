@@ -92,6 +92,8 @@ def make_host(src):
                  and getattr(node.targets[0], "id", "") in reads]
     ns = dict(progress_stub.namespace(), os=os, re=__import__("re"), shutil=shutil,
               urllib=urllib, sys=sys, json=__import__("json"))
+    import store_title_stub
+    ns.update(store_title_stub.namespace(src))  # every name the player sees (4 Nov 2026)
     exec("\n\n".join(constants + [ast.get_source_segment(src, h) for h in helpers]), ns)
     exec("class Host:\n" + textwrap.indent(methods, "    "), ns)
     host = ns["Host"]()

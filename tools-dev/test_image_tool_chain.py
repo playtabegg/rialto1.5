@@ -43,12 +43,12 @@ failures = []
 METHODS = ("create_iso", "_build_single_iso", "create_spanned_isos", "_write_one_image", "_remove_partial_iso",
            "_iso_fallback_unless_pressed", "write_pressing_files", "queue_row_result", "build_all",
            "_collect_disc_fileset", "_fileset_size", "_fileset_disc_bytes", "_fileset_needs_udf", "image_growth",
-           "download_essential_runtimes")
+           "download_essential_runtimes", "tool_time_limit")
 MODULE = ("__version__", "_CONTROL_CHARS", "_ISS_META", "_ISS_PATH_META", "_WINDOWS_RESERVED", "MKISOFS_IMAGE_PART", "MKISOFS_PATH_LIST", "mkisofs_graft", "mkisofs_label",
           "mkisofs_path_list", "mkisofs_command", "mkisofs_reads_utf8", "tool_words", "iss_value", "sanitize_text",
           "PLACED_FILES_DIR", "PRESSED_DISC_TYPES", "SECTOR_BYTES", "DVD9_LAYER0_SECTORS", "DVD9_LAYER_LIMIT",
           "DVD5_SECTORS", "dvd9_layers", "iso_facts", "file_md5", "checksum_text", "master_sheet_text",
-          "oversized_disc_warnings", "placed_files_root")
+          "oversized_disc_warnings", "placed_files_root", "no_time_limit_hint")
 MKISOFS, OSCDIMG, CARRIED = r"C:\Path\mkisofs.exe", r"C:\ADK\oscdimg.exe", r"C:\MEI\helpers\cdrtools\mkisofs.exe"
 
 
@@ -70,6 +70,8 @@ def load():
     missing = [n for n in MODULE if n not in ns]
     if missing:
         raise SystemExit("could not extract " + ", ".join(missing))
+    import store_title_stub
+    ns.update(store_title_stub.namespace(src))  # the disc label names the game (4 Nov 2026)
     app = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "RialtoApp")
     found = {i.name: textwrap.dedent(ast.get_source_segment(src, i)) for i in app.body
              if isinstance(i, ast.FunctionDef) and i.name in METHODS}
@@ -252,6 +254,8 @@ def main():
                % ("pressed" if pressed else "unpressed"),
                len(h.calls) == 1 and not h.zip_made and raised and "30 minutes" in raised and isos(out) == []
                and leftovers(out) == [] and h.images_made == [], (h.calls, raised, os.listdir(out)))
+            ok("and its reason names No time limit (1.5.2)",
+               raised and "Tick No time limit and build again" in raised, raised)
 
         h = Host({MKISOFS: "close"})
         try:
@@ -296,6 +300,8 @@ def main():
         ok("a timeout on Disc 2: no next tool, its half-written image removed, the set stops",
            raised and "30 minutes" in raised and [c[:2] for c in h.calls] == [(MKISOFS, "ok"), (MKISOFS, "timeout")]
            and isos(out) == ["Sky Quest Disc 1.iso"] and leftovers(out) == [], (raised, h.calls, os.listdir(out)))
+        ok("and its reason names No time limit (1.5.2)",
+           raised and "Tick No time limit and build again" in raised, raised)
 
         h, raised = run_set({MKISOFS: ["ok", "close"]})
         ok("closed while Disc 2 is written: its half-written image removed, no next tool, stopped",
@@ -336,6 +342,7 @@ def main():
                 self.entries = {"Title": Var("Sky Quest"), "Developer": Var("Your Studio")}
                 self._batch = None
                 self.popups = []
+                self.no_time_limit = Var(False)  # unticked: the limits stand (1.5.2)
 
             def __getattr__(self, name):
                 if name.endswith("_var"):

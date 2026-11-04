@@ -7,7 +7,7 @@ it taller than a 1080p laptop's screen at 125 percent, and it was given no
 position. 1.5.0's page asked for 1128 lines, so at 1080p the Disc Icon row and
 the whole log sat under the build bar. Now, when the page asks for more than
 the window holds, the three-steps card folds to its title line with Show
-beside it: 1005 lines folded, 1128 open.
+beside it: 1005 lines folded, 1128 open (1009 and 1132 since 1.5.2's Menu Music row).
 
 Where even the folded page is more than the window holds (a 1080p laptop at 125
 percent has 816 lines), the same page is laid out tighter, a level at a time,
@@ -78,12 +78,15 @@ if sys.platform == "win32" and calls:
     exec(calls, asking)
     exec(ask, asking)
     corner = (0, 0, 100, 100)  # a window at the main monitor's corner: the same monitor every time it is asked
+    # Every pointer type ctypes makes is a subclass of _Pointer. Python 3.14 keeps each on its own
+    # type, so its _pointer_type_cache can no longer be counted.
+    pointer_types = lambda: len(ctypes._Pointer.__subclasses__())  # noqa: E731
     first = asking["work_area_of_monitor"](corner)
-    declared, kept = asking["monitor_calls"](), len(getattr(ctypes, "_pointer_type_cache", ()))
+    declared, kept = asking["monitor_calls"](), pointer_types()
     again = [asking["work_area_of_monitor"](corner) for _ in range(3)]
     ok("asked three times more, Windows gives the same work area and nothing is declared again",
        bool(first) and again == [first] * 3 and asking["monitor_calls"]() is declared
-       and len(getattr(ctypes, "_pointer_type_cache", ())) == kept)
+       and pointer_types() == kept)
 
 ns = {}
 exec(method(src, "fit_in_work_area"), ns)
@@ -273,7 +276,7 @@ class Page:
 
 
 exec(method(src, "tighten_to_fit"), ns)
-MEASURED = [1005, 810, 703, 655]  # what the folded page asks as it always was, and at levels 1, 2 and 3 (96 DPI)
+MEASURED = [1009, 810, 713, 665]  # what the folded page asks at level 0 and at levels 1, 2 and 3 (96 DPI, 1.5.2)
 
 
 def chosen(holds, breaks_at=None):
@@ -282,18 +285,18 @@ def chosen(holds, breaks_at=None):
     return page.page_level, page.drawn, len(page.said), " ".join(page.said)
 
 
-print("the level, for a page that asks 1005 lines folded and 810, 703 and 655 at levels 1, 2 and 3")
+print("the level, for a page that asks 1009 lines folded and 810, 713 and 665 at levels 1, 2 and 3")
 ok("a window that holds the folded page is left as it always was (1080p at 100 percent: 1032 lines)",
-   chosen(1032)[:3] == (0, [], 0) and chosen(1005)[:3] == (0, [], 0))
+   chosen(1032)[:3] == (0, [], 0) and chosen(1009)[:3] == (0, [], 0))
 ok("a 1080p laptop at 125 percent (816 lines): level 1, and nothing said",
    chosen(816)[:3] == (1, [1], 0) and chosen(810)[:3] == (1, [1], 0))
 ok("1366 by 768 (720 lines): level 2, by way of level 1",
    chosen(809)[:3] == (2, [1, 2], 0) and chosen(720)[:3] == (2, [1, 2], 0))
-ok("1080p at 150 percent (672 lines): level 3", chosen(702)[:3] == (3, [1, 2, 3], 0) and chosen(672)[:3] == (3, [1, 2, 3], 0)
-   and chosen(655)[:3] == (3, [1, 2, 3], 0))
+ok("1080p at 150 percent (672 lines): level 3", chosen(712)[:3] == (3, [1, 2, 3], 0) and chosen(672)[:3] == (3, [1, 2, 3], 0)
+   and chosen(665)[:3] == (3, [1, 2, 3], 0))
 ok("a window that holds less than the tightest page: level 3, and one line in the log says what is cut",
-   chosen(654)[:3] == (3, [1, 2, 3], 1) and "does not fit this screen" in chosen(654)[3]
-   and "655 pixels tall with room for 654" in chosen(654)[3])
+   chosen(664)[:3] == (3, [1, 2, 3], 1) and "does not fit this screen" in chosen(664)[3]
+   and "665 pixels tall with room for 664" in chosen(664)[3])
 ok("if laying a level out raises, Rialto says so once and stays at the level it had",
    chosen(720, breaks_at=2)[:3] == (1, [1], 1) and "could not be laid out tighter" in chosen(720, breaks_at=2)[3])
 

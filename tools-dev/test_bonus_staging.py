@@ -358,6 +358,7 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
         with open(os.path.join(app_root, "menu.exe"), "wb") as f:
             f.write(b"MZ pre-built generic menu")
 
+    import store_title_stub
     helper_ns = {"os": os, "sys": sys, "shutil": shutil, "subprocess": subprocess,
                  "tempfile": tempfile, "time": time,
                  "PREVIEW_PREFIX": PREVIEW_PREFIX, "_STARTED_AT": 0.0,
@@ -378,6 +379,7 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
     methods = extract_methods(src, "RialtoApp",
                               ["preview_disc_menu", "detect_mod_launcher_exe",
                                "build_menu_config", "write_menu_config",
+                               "menu_theme_config", "menu_theme_font",
                                "default_bonus_dir", "resolved_bonus_dir",
                                "default_mod_dir", "resolved_mod_dir",
                                "staged_mod_dir_name",
@@ -398,6 +400,7 @@ def run_preview(base, src, with_bonus=True, with_mods=True, mod_launcher=True,
             "PREVIEW_PREFIX": PREVIEW_PREFIX,
             "sanitize_text": helper_ns["sanitize_text"],
             "split_launch_args": helper_ns["split_launch_args"],
+            **store_title_stub.namespace(src),
         },
         current_game_path=game_path,
         mod_launcher_var=Flag(mod_launcher),

@@ -150,6 +150,7 @@ else:
 import atexit
 import threading
 import winsound  # For WAV playback on Windows
+import wave  # Menu Music: read as the disc menu's Windows will play it
 import tempfile
 import time
 import datetime
@@ -171,7 +172,7 @@ APP_NAME = "Rialto"
 #: The one place the version lives. rialto.spec and menu.spec read it from
 #: this line (tools-dev/test_version_agreement.py pins that), the release
 #: feed compares against it, and the About/Help text shows it.
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 
 # GOG import unpacks Inno Setup installers with innoextract, downloaded on
 # first use. Version and checksum are pinned together: bump both, never one.
@@ -1119,6 +1120,354 @@ def sanitize_text(value):
     return str(value or "").translate(_CONTROL_CHARS)
 
 
+# A store names the format after the title, in one bracket at the end: "Moth
+# Lamp (PC CD)", "KESTREL (PC DVD)", "Furrow (PC DVD+Soundtrack CD)". That
+# helps a buyer choose in the store and nowhere else, and a developer who types
+# the store's title into Game Title put "Moth Lamp PC CD" on every shortcut.
+# Moth Lamp's developer asked for the game's own name there, for every game from
+# then on (4 Nov 2026). This is the factory's rule, ported line for line, and
+# tools-dev/test_store_format.py proves it on the factory's own vectors
+# (tools-dev/store_title_vectors.json, the factory's with the game names changed).
+# The factory takes a film's format off the same way ("My Film (Blu-ray)",
+# "My Film [DVD + Blu-ray]", "(4K UHD)"), so the film words are here too.
+#
+# Words that name where a game runs or what it comes on. Edition words are not
+# here on purpose: "Deluxe Edition" is a different game to the player.
+_FORMAT_PLATFORMS = frozenset({"pc", "mac", "macos", "linux", "windows"})
+_FORMAT_MEDIA = frozenset({"cd", "dvd", "blu-ray", "bluray", "bd", "4k-uhd", "rom", "cd-rom", "dvd-rom",
+                           "disc", "discs", "disk", "disks"})
+# Words that go with a medium but never name one alone. A resolution is one of
+# them: "(4K)", "(UHD)", "(Ultra HD)" and "(Soundtrack)" stay, as a remaster's
+# title may say them; "(4K UHD)" and "(UHD Blu-ray)" come off.
+_FORMAT_ALSO = frozenset({"soundtrack", "4k", "uhd"})
+# What joins two of them: "PC DVD+Soundtrack CD", "PC & Mac", "CD and DVD".
+_FORMAT_JOINERS = frozenset({"+", "&", "and", "/", ",", "with"})
+# "2-Disc", "2 Discs", "3xCD".
+_FORMAT_COUNTED = re.compile(r"\d{1,2}(?:-|x)?(?:disc|discs|disk|disks|cd|cds|dvd|dvds)")
+_FORMAT_COUNT = re.compile(r"\d{1,2}")
+_FORMAT_TOKEN = re.compile(r"[+&/,]|[^\s+&/,]+")
+_FORMAT_BLU_RAY = re.compile(r"blu\s+ray", re.IGNORECASE)
+# "Ultra HD" is "UHD", a resolution; "4K UHD" together is the disc, as the
+# stores sell it. A bare "HD" names nothing.
+_FORMAT_ULTRA_HD = re.compile(r"\bultra\s+hd\b", re.IGNORECASE)
+_FORMAT_4K_UHD = re.compile(r"\b(?:4k[\s-]+uhd|uhd[\s-]+4k)\b", re.IGNORECASE)
+# A hyphen, and the dashes a title can carry instead of one.
+_FORMAT_DASHES = "-" + "".join(chr(code) for code in (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212))
+# Read as a hyphen inside the words, only to read them: "Blu-ray" typed with a
+# non-breaking hyphen is "Blu-ray".
+_FORMAT_AS_HYPHEN = str.maketrans(dict.fromkeys(_FORMAT_DASHES[1:], "-"))
+_FORMAT_BRACKETS = {")": "(", "]": "["}
+
+
+def _format_words(text):
+    """The words of a format, folded: "PC DVD+Soundtrack CD" is pc, dvd, +, soundtrack, cd."""
+    text = _FORMAT_BLU_RAY.sub("blu-ray", text.translate(_FORMAT_AS_HYPHEN))
+    return [token.casefold() for token in
+            _FORMAT_TOKEN.findall(_FORMAT_4K_UHD.sub("4k-uhd", _FORMAT_ULTRA_HD.sub("uhd", text)))]
+
+
+def is_store_format(text):
+    """Do these words only name a platform or a medium? ("PC CD", "PC DVD+Soundtrack CD", "2-Disc DVD")"""
+    import unicodedata
+    words = _format_words(unicodedata.normalize("NFKC", text))
+    named = False
+    for index, word in enumerate(words):
+        if word in _FORMAT_PLATFORMS or word in _FORMAT_MEDIA or _FORMAT_COUNTED.fullmatch(word):
+            named = True
+        elif word in _FORMAT_ALSO:
+            continue
+        elif word in _FORMAT_JOINERS:
+            # A joiner joins: not first, not last, not two in a row.
+            if index == 0 or index == len(words) - 1 or words[index - 1] in _FORMAT_JOINERS:
+                return False
+        elif _FORMAT_COUNT.fullmatch(word):
+            # A count counts discs: "2 Discs", "2 CD", never a bare "(2)".
+            following = words[index + 1] if index + 1 < len(words) else ""
+            if following not in _FORMAT_MEDIA:
+                return False
+        else:
+            return False
+    return named
+
+
+def _format_kept(text, end):
+    """Where the game's name ends once the format from `end` on is off, or 0 when nothing would be left.
+
+    Nor when the name would leave a bracket open, because then the format may
+    be inside the game's own bracket. A bracket closed without opening ("Smile
+    :)", "1) Begin") is part of the name and holds nothing.
+    """
+    head = text[:end].rstrip().rstrip(_FORMAT_DASHES + ":,").rstrip()
+    if not any(ch.isalnum() for ch in head):
+        return 0
+    if head.count("(") > head.count(")") or head.count("[") > head.count("]"):
+        return 0
+    return len(head)
+
+
+def _format_in_bracket(text):
+    closing = text[-1:] if text else ""
+    if closing not in _FORMAT_BRACKETS:
+        return 0
+    opening = text.rfind(_FORMAT_BRACKETS[closing])
+    if opening <= 0:
+        return 0
+    inside = text[opening + 1:-1]
+    if any(ch in inside for ch in "()[]") or not is_store_format(inside):
+        return 0
+    return _format_kept(text, opening)
+
+
+def _format_after_dash(text):
+    for index in range(len(text) - 2, 0, -1):
+        if text[index] in _FORMAT_DASHES and text[index - 1].isspace() and text[index + 1].isspace():
+            if is_store_format(text[index + 1:]):
+                return _format_kept(text, index)
+            return 0
+    return 0
+
+
+def _format_as_read(title):
+    """The title as the rule reads it, through NFKC, and which of the developer's characters each one is from.
+
+    One character at a time, so each read character comes from exactly one of
+    the developer's: "™" reads as "TM", and both letters point back at the "™".
+    """
+    import unicodedata
+    read, origin = [], []
+    for index, ch in enumerate(title):
+        for part in unicodedata.normalize("NFKC", ch):
+            read.append(part)
+            origin.append(index)
+    return "".join(read), origin
+
+
+def player_title(title):
+    """The game's own name: `title` with a store's format taken off, or `title` as it is.
+
+    Takes off one format at the end: a bracket whose words all name a platform
+    or a medium ("Moth Lamp (PC CD)", "[PC DVD + Soundtrack CD]"), or the same
+    words after a spaced dash ("Moth Lamp - PC DVD"). Nothing else comes off:
+    the same words after a bare space are part of a name as often as not
+    ("Home PC", "Big Mac", "Escape from Linux", "The Last PC CD"), so "Moth Lamp
+    PC CD" stays as typed. Editions and other brackets stay ("KESTREL - Deluxe
+    Edition", "Ghosts (Remastered)"), and a title that is nothing but a format
+    is left as it is, because a disc needs a name. Case does not matter.
+
+    The format is found in the title as NFKC reads it, so "(PC CD)" typed in
+    full-width characters is a format too, but the name is cut from the
+    developer's own characters: "Moth Lamp™ (PC CD)" is "Moth Lamp™", never
+    "Moth LampTM".
+
+    Every name a player sees goes through this; the Game Title box keeps what
+    the developer typed, and so do the master sheet and the build log.
+    """
+    title = str(title or "")
+    text, origin = _format_as_read(title)
+    text = text.rstrip()
+    for rule in (_format_in_bracket, _format_after_dash):
+        end = rule(text)
+        if end:
+            # Cut from what the developer typed, through the character the name's last read character is from.
+            return title[:origin[end - 1] + 1].strip()
+    return title
+
+
+def store_format_note(title):
+    """The build log's one line when player_title took a format off, else ""."""
+    title = str(title or "")
+    name = player_title(title)
+    if name == title:
+        return ""
+    # The name is the start of what was typed, so what follows it is the format, in the developer's characters.
+    taken = title.strip()[len(name):].strip().lstrip(_FORMAT_DASHES + ":,").strip()
+    return sanitize_text(f"Shortcuts and Setup use {name}: {taken} is for the store page.")
+
+
+# Where Windows keeps every install's uninstall entry, Inno's "<AppId>_is1".
+_UNINSTALL_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+# The formats the store sells a game in, as its titles name them.
+STORE_FORMATS = ("PC CD", "PC DVD", "PC CD+Soundtrack CD", "PC DVD+Soundtrack CD")
+
+
+def inno_uninstall_key(identity):
+    """The uninstall key Inno names for an install's identity, under _UNINSTALL_KEY.
+
+    "<identity>_is1", except that an identity past 57 characters with no
+    character past "~" is first cut to its first 48, a tilde and its CRC32 in
+    eight upper-case hex digits (the '%.48s~%.8x' in Inno 6.5.4's Setup.e32).
+    """
+    import zlib
+    if len(identity) > 57 and all(ord(ch) <= 126 for ch in identity):
+        return "%s~%08X_is1" % (identity[:48], zlib.crc32(identity.encode("ascii")))
+    return identity + "_is1"
+
+
+def earlier_installs(title, name):
+    """The discs built before 4 Nov this game may be installed from: (identity, shortcut name) each.
+
+    `title` is the Game Title as typed and `name` the game's name
+    (player_title). A disc built before 4 Nov had no AppId, so its identity
+    was its AppName, the title as typed. A store may have sold the game under
+    another format before ("(PC DVD)", then "(PC CD)"), so the game's name in
+    every format the store sells is looked for after the title as typed, and
+    that is so when the title typed today is the game's name too: a developer
+    whose disc said "Moth Lamp (PC CD)" may type "Moth Lamp" once 1.5.2 keeps
+    the format for the store page, and the player's install is still the one
+    to upgrade. One per key (the registry does not tell case apart), and never
+    this disc's own: the 120-character cap can make a title and its name one
+    key.
+
+    The factory's rule, proved on its own vectors
+    (tools-dev/install_identity_vectors.json).
+    """
+    own = iss_value(name, 'Game').strip()
+    titles = [title] + ["%s (%s)" % (name, f) for f in STORE_FORMATS]
+    seen, kept = {inno_uninstall_key(own).casefold()}, []
+    for earlier in titles:
+        identity = iss_value(earlier, 'Game').strip()
+        key = inno_uninstall_key(identity).casefold()
+        if key not in seen:
+            seen.add(key)
+            kept.append((identity, iss_value(earlier, 'Game', for_path=True)))
+    return kept
+
+
+def earlier_menu_titles(title, name):
+    """The titles a disc of this game built before 4 Nov kept the player's choices under (1.5.2).
+
+    The disc menu keeps a player's stars, sort and menu language under the
+    disc's title. Before 4 Nov that was the title as typed, "Moth Lamp (PC
+    CD)"; now it is the game's name. So the menu is told the title as typed
+    and the game's name in every format the store sells, and reads the
+    choices from the first that has them when its own title has none yet.
+    """
+    titles = []
+    for earlier in [str(title or "").strip()] + ["%s (%s)" % (name, f) for f in STORE_FORMATS]:
+        if earlier and earlier != name and earlier not in titles:
+            titles.append(earlier)
+    return titles
+
+
+def install_delete_lines(earlier):
+    """[InstallDelete]: the shortcuts an earlier install named with the format.
+
+    Inno never removes a shortcut the new script no longer names, so an
+    upgraded PC would show both. Only when that install is the one found: on
+    any other PC they belong to an install that stays.
+    """
+    lines = "\n[InstallDelete]\n"
+    for index, (_identity, shortcut) in enumerate(earlier, start=1):
+        check = "Check: IsEarlier(%d)" % index
+        for suffix in ("", " (Compatibility Mode)"):
+            lines += f'Type: files; Name: "{{code:EarlierGroup}}\\{shortcut}{suffix}.lnk"; {check}\n'
+        lines += f'Type: files; Name: "{{userdesktop}}\\{shortcut}.lnk"; {check}\n'
+    return lines + 'Type: dirifempty; Name: "{code:EarlierGroup}"; Check: FoundEarlier\n'
+
+
+def install_identity_code(earlier, name, group):
+    """The installer's [Code]: the install's identity, decided on the player's PC.
+
+    The identity is the earlier install's when the PC has one, else `name`,
+    the game's own, and the same every time Setup asks, which Inno's AppId
+    help requires of a {code:...} identity. Setup reads an earlier install
+    only where it puts this one, the player's own keys or, with /ALLUSERS,
+    the machine's, so that is where this looks: a disc installed for all
+    users is not one a per-user Setup can upgrade, and it and its shortcuts
+    are left as they are. An upgrade reuses the earlier install's Start Menu
+    folder, named with the format, so the wizard keeps that folder's name for
+    [InstallDelete] and offers `group` in its place. This disc's own install
+    is looked for first, and on a PC that holds it, it is the one upgraded.
+
+    The factory's [Code] line for line. Every value has been
+    through iss_value, so none breaks its line; constants are not read inside
+    [Code], so a brace would only be a brace, and a single quote is doubled
+    as Pascal doubles it.
+    """
+    def literal(text):
+        return "'" + text.replace("'", "''") + "'"
+
+    # This disc's own install first: on a PC that holds it and an earlier one
+    # too, its own is upgraded (0, as with nothing found), and the earlier
+    # install keeps its folder and shortcuts.
+    own = literal("%s\\%s" % (_UNINSTALL_KEY, inno_uninstall_key(name)))
+    checks = "  if RegKeyExists(RootKey, %s) then\n    Result := 0\n" % own
+    answers = ""
+    for index, (identity, _shortcut) in enumerate(earlier, start=1):
+        key = literal("%s\\%s" % (_UNINSTALL_KEY, inno_uninstall_key(identity)))
+        checks += "  else if RegKeyExists(RootKey, %s) then\n    Result := %d\n" % (key, index)
+        answers += "    %d: Result := %s;\n" % (index, literal(identity))
+    return ("\n[Code]\n"
+            "var\n"
+            "  EarlierGroupName: String;\n"
+            "\n"
+            "function EarlierInstall: Integer;\n"
+            "var\n"
+            "  RootKey: Integer;\n"
+            "begin\n"
+            "  if IsAdminInstallMode then\n"
+            "    RootKey := HKLM\n"
+            "  else\n"
+            "    RootKey := HKCU;\n"
+            + checks +
+            "  else\n"
+            "    Result := 0;\n"
+            "end;\n"
+            "\n"
+            "function FoundEarlier: Boolean;\n"
+            "begin\n"
+            "  Result := EarlierInstall <> 0;\n"
+            "end;\n"
+            "\n"
+            "function IsEarlier(Which: Integer): Boolean;\n"
+            "begin\n"
+            "  Result := EarlierInstall = Which;\n"
+            "end;\n"
+            "\n"
+            "function InstallIdentity(Param: String): String;\n"
+            "begin\n"
+            "  case EarlierInstall of\n"
+            + answers +
+            "  else\n"
+            f"    Result := {literal(name)};\n"
+            "  end;\n"
+            "end;\n"
+            "\n"
+            "function EarlierGroup(Param: String): String;\n"
+            "begin\n"
+            "  if EarlierGroupName = '' then\n"
+            "    Result := ExpandConstant('{group}')\n"
+            "  else\n"
+            "    Result := ExpandConstant('{autoprograms}\\') + EarlierGroupName;\n"
+            "end;\n"
+            "\n"
+            "procedure InitializeWizard;\n"
+            "begin\n"
+            "  if FoundEarlier then\n"
+            "  begin\n"
+            "    EarlierGroupName := WizardForm.GroupEdit.Text;\n"
+            f"    WizardForm.GroupEdit.Text := {literal(group)};\n"
+            "  end;\n"
+            "end;\n")
+
+
+def volume_label(label, limit=16):
+    """The disc's label in File Explorer: `label`, or when longer than `limit`, the title before its subtitle,
+    else its whole words; a first word longer than the label is cut.
+
+    His note of 5 Oct 2026: a title like "Paintbox - Squares and Lines" read
+    "Paintbox - Squar" in Explorer; it should read "Paintbox". The factory's rule.
+    """
+    if len(label) <= limit:
+        return label
+    for separator in (" - ", " \u2013 ", " \u2014 ", ": ", " ("):
+        head = label.split(separator, 1)[0].strip()
+        if separator in label and 0 < len(head) <= limit:
+            return head
+    words = label[:limit + 1].rsplit(" ", 1)[0].strip()
+    return words if 0 < len(words) <= limit else label[:limit]
+
+
 def split_launch_args(value, max_args=16, max_len=256):
     """Split an author's launch-argument line into a list for the disc menu.
 
@@ -1361,7 +1710,7 @@ def placed_files_lines(staged):
     return lines
 
 
-# How hard the installer squeezes the game (1.5.1, B7). Balanced is 1.5.0's
+# How hard the installer compresses the game (1.5.1, B7). Balanced is 1.5.0's
 # installer exactly, and what a profile without the key gets. Solid
 # compression stays off in every choice: Setup would have to unpack
 # everything before a file to reach it, and a multi-disc install that hits an
@@ -1516,6 +1865,16 @@ def progress_text(step, fraction=None, seconds=0.0, detail=""):
     return "%s: %s" % (step, ", ".join(parts))
 
 
+def no_time_limit_hint(limit, step, again="build"):
+    """What every time limit's message ends with (1.5.2, issue #4): the box that lifts the limit.
+
+    A 30 GB game's installer took ISCC past its hour, and nothing on the
+    screen said that a limit could be lifted. The line names the limit and
+    the step, so it reads on its own ("an hour", "to make its installer").
+    """
+    return "A very large game can need more than %s %s. Tick No time limit and %s again" % (limit, step, again)
+
+
 def iscc_compressing_path(line):
     """The file an ISCC "   Compressing: <path>" line names, or None.
 
@@ -1554,6 +1913,346 @@ def escape_batch(value):
     for ch in ("^", "&", "|", ">", "<", "(", ")"):
         text = text.replace(ch, "^" + ch)
     return text
+
+
+def font_facts(path):
+    """A .ttf or .otf file's family name and line height, read from the file itself (1.5.2).
+
+    Returns {"family", "ascent", "descent"}: the family is the name Windows
+    loads the font under (the name table's family, in English first), and the
+    ascent and descent are the room above and below the line as parts of the
+    font's size, the larger of the two ways a font gives them. None when the
+    file is not a TrueType or OpenType font. A frozen Rialto has no Qt to ask,
+    and it is the menu on the player's Windows that loads the font, so the
+    tables are read here as Windows reads them.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read(32 * 1024 * 1024)
+    except OSError:
+        return None
+    if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+        return None
+    tables = {}
+    for at in range(12, 12 + 16 * int.from_bytes(data[4:6], "big"), 16):
+        if at + 16 > len(data):
+            return None
+        offset, length = int.from_bytes(data[at + 8:at + 12], "big"), int.from_bytes(data[at + 12:at + 16], "big")
+        if offset + length <= len(data):
+            tables[data[at:at + 4]] = data[offset:offset + length]
+
+    def number(table, at, signed=False):
+        return int.from_bytes(table[at:at + 2], "big", signed=signed) if len(table) >= at + 2 else 0
+
+    names = tables.get(b"name", b"")
+    family, best = "", None
+    strings = number(names, 4)
+    for at in range(6, 6 + 12 * number(names, 2), 12):
+        if at + 12 > len(names):
+            break
+        platform, encoding, language, name_id = (number(names, at + n) for n in (0, 2, 4, 6))
+        if name_id != 1:
+            continue
+        # Windows' own record in US English first, then any Windows record, then the Mac and Unicode ones.
+        rank = ((0 if language == 0x409 else 1) if platform == 3 and encoding in (0, 1, 10)
+                else 2 if platform == 1 and encoding == 0 and language == 0 else 3 if platform == 0 else None)
+        if rank is None or (best is not None and rank >= best):
+            continue
+        start = strings + number(names, at + 10)
+        raw = names[start:start + number(names, at + 8)]
+        try:
+            text = raw.decode("mac_roman" if platform == 1 else "utf-16-be")
+        except UnicodeDecodeError:
+            continue
+        family, best = text.strip(), rank
+    head, hhea, os2 = tables.get(b"head", b""), tables.get(b"hhea", b""), tables.get(b"OS/2", b"")
+    units = number(head, 18) or 1000
+    ascent = max(number(hhea, 4, signed=True), number(os2, 74))
+    descent = max(-number(hhea, 6, signed=True), number(os2, 76))
+    return {"family": family, "ascent": max(ascent, 0) / units, "descent": max(descent, 0) / units}
+
+
+def menu_font_family_ok(family):
+    """The disc menu's own rule for a font's family name (_menu_theme): it goes into a style sheet."""
+    return bool(family) and len(family) <= 64 and all(ch.isalnum() or ch in " -" for ch in family)
+
+
+def font_license_beside(font):
+    """The license file beside a font, or "" (1.5.2).
+
+    The OFL by name first. A plain LICENSE only counts in a folder that holds
+    nothing but fonts and text, or it could be the game's own licence.
+    """
+    folder = os.path.dirname(font)
+    try:
+        entries = os.listdir(folder)
+        only_fonts = (not any(os.path.isdir(os.path.join(folder, n)) for n in entries)
+                      and all(os.path.splitext(n)[1].lower() in (".ttf", ".otf", ".txt", ".md", "")
+                              for n in entries))
+    except OSError:
+        return ""
+    names = ["OFL.txt", "OFL", "OFL-1.1.txt"] + (["LICENSE.txt", "LICENSE", "license.txt"] if only_fonts else [])
+    for name in names:
+        if os.path.isfile(os.path.join(folder, name)):
+            return os.path.join(folder, name)
+    return ""
+
+
+# A font's license goes on every disc as menu_font_license.txt (1.5.2), so it
+# must be what a license is: a short text file. The OFL is 4 KB; any file at all
+# could otherwise ride onto a disc from a profile or a shared template.
+MENU_FONT_LICENSE_MAX_BYTES = 1024 * 1024
+MENU_FONT_LICENSE_TYPES = (".txt", ".md", "")
+
+
+def font_license_problem(licence):
+    """Why `licence` is not a font license the build puts on a disc, in plain words, or "" (1.5.2)."""
+    name = os.path.basename(licence)
+    if os.path.splitext(licence)[1].lower() not in MENU_FONT_LICENSE_TYPES:
+        return "its license, %s, is not a text file: a font's license is a .txt or .md file, such as OFL.txt" % name
+    try:
+        size = os.path.getsize(licence)
+        with open(licence, "rb") as f:
+            head = f.read(MENU_FONT_LICENSE_MAX_BYTES + 1)
+    except OSError:
+        return "its license, %s, cannot be read" % name
+    if size > MENU_FONT_LICENSE_MAX_BYTES or len(head) > MENU_FONT_LICENSE_MAX_BYTES:
+        return ("its license, %s, is %s, and a font's license is a text file of 1 MB at most"
+                % (name, format_megabytes(size)))
+    # A NUL is in no text file but one saved as UTF-16, which starts with its byte order mark.
+    if b"\x00" in head and not head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "its license, %s, is not text: a font's license is a text file, such as OFL.txt" % name
+    return ""
+
+
+def menu_font_check(font, licence=""):
+    """A menu font as the build takes it (1.5.2): (font, licence, family, problem).
+
+    `licence` is the file the author picked, or "" to look beside the font.
+    No license, no font: an open font license has to travel with the font. The
+    family is read from the file and must pass the menu's own rule, and the
+    license must be a short text file (font_license_problem), because it goes
+    on the disc. `problem` says in plain words why the font is not used; then
+    font, licence and family are all "".
+    """
+    if os.path.splitext(font)[1].lower() not in (".ttf", ".otf"):
+        return "", "", "", "it is not a .ttf or .otf file"
+    if not os.path.isfile(font):
+        return "", "", "", "the file is not there"
+    facts = font_facts(font)
+    if facts is None:
+        return "", "", "", "it is not a TrueType or OpenType font, so the menu cannot load it"
+    family = facts["family"]
+    if not family:
+        return "", "", "", "it carries no family name, so the menu cannot load it"
+    if not menu_font_family_ok(family):
+        return "", "", "", ('its name, "%s", has more than letters, digits, spaces and hyphens, and the '
+                            'menu takes only those' % family[:80])
+    if licence and not os.path.isfile(licence):
+        return "", "", "", "the license file picked for it is not there"
+    licence = licence or font_license_beside(font)
+    if not licence:
+        return "", "", "", ("no license file was found beside it (such as OFL.txt), and a font goes on a disc "
+                            "only with its license: pick the license in Font and Colors")
+    problem = font_license_problem(licence)
+    if problem:
+        return "", "", "", problem
+    return font, licence, family, ""
+
+
+# Menu Music (1.5.2): the most a WAV may weigh. Windows' PlaySound holds the
+# whole file in memory while the disc menu plays it, so the menu takes none
+# larger (_menu_music), and Rialto says so here rather than on the disc.
+MENU_MUSIC_MAX_BYTES = 256 * 1024 * 1024
+# Past this the build says plainly what the music adds to the disc.
+MENU_MUSIC_LARGE_BYTES = 50 * 1024 * 1024
+
+
+# The WAV format tags for floating-point samples: IEEE float, and WAVE_FORMAT_EXTENSIBLE, whose
+# sub-format GUID then says which. A float WAV is not compressed, but Python's wave module reads
+# only integer PCM, and the menu takes only that.
+WAVE_FORMAT_IEEE_FLOAT = 3
+WAVE_FORMAT_EXTENSIBLE = 0xFFFE
+
+
+def wav_format_tag(path):
+    """The format tag in a WAV's fmt chunk, the sub-format's for WAVE_FORMAT_EXTENSIBLE, or None (1.5.2)."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"RIFF":
+                return None
+            f.read(4)
+            if f.read(4) != b"WAVE":
+                return None
+            for _chunk in range(64):
+                head = f.read(8)
+                if len(head) < 8:
+                    return None
+                kind, size = head[:4], int.from_bytes(head[4:], "little")
+                if kind == b"fmt ":
+                    fmt = f.read(min(size, 64))
+                    if len(fmt) < 2:
+                        return None
+                    tag = int.from_bytes(fmt[:2], "little")
+                    if tag == WAVE_FORMAT_EXTENSIBLE and len(fmt) >= 26:
+                        return int.from_bytes(fmt[24:26], "little")
+                    return tag
+                f.seek(size + (size & 1), 1)
+    except OSError:
+        return None
+    return None
+
+
+def menu_music_check(path):
+    """A Menu Music file as the build takes it (1.5.2): (seconds, size, problem).
+
+    The disc menu plays it with Windows' own PlaySound, so no codec is needed,
+    and only a plain PCM WAV plays the same on every PC: a compressed one plays
+    only where the right codec happens to be installed. `problem` says in plain
+    words why the file is not used; seconds and size are then 0.
+    """
+    if os.path.splitext(path)[1].lower() != ".wav":
+        return 0, 0, "it is not a .wav file"
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0, 0, "the file is not there"
+    if size > MENU_MUSIC_MAX_BYTES:
+        return 0, 0, ("it is %s, and the menu holds its music in memory as it plays, so it takes a WAV of "
+                      "%d MB at most: a shorter loop makes it smaller" % (format_megabytes(size),
+                                                                       MENU_MUSIC_MAX_BYTES // (1024 * 1024)))
+    try:
+        with wave.open(path, "rb") as sound:
+            frames, rate = sound.getnframes(), sound.getframerate()
+    except wave.Error as e:
+        if "format" in str(e):
+            if wav_format_tag(path) == WAVE_FORMAT_IEEE_FLOAT:
+                return 0, 0, ("it is a float WAV (such as 32-bit float), and the menu takes only a PCM WAV, which "
+                              "plays the same on every PC: export the music as a 16-bit PCM WAV")
+            return 0, 0, "it is a compressed WAV, and the menu plays only PCM WAV: export the music as a PCM WAV"
+        return 0, 0, "it is not a WAV file Rialto can read (%s): export the music as a PCM WAV" % e
+    except (OSError, EOFError) as e:
+        return 0, 0, "it is not a WAV file Rialto can read (%s): export the music as a PCM WAV" % e
+    if frames <= 0 or rate <= 0:
+        return 0, 0, "it holds no sound"
+    return frames / rate, size, ""
+
+
+def format_megabytes(size):
+    """A file's weight as a person reads it: "23 MB", or "0.4 MB" under one."""
+    megabytes = size / (1024 * 1024)
+    return "%.1f MB" % megabytes if megabytes < 1 else "%d MB" % round(megabytes)
+
+
+def format_length(seconds):
+    """A length of sound as minutes and seconds: "2:05"."""
+    whole = int(round(seconds))
+    return "%d:%02d" % (whole // 60, whole % 60)
+
+
+def menu_theme_from_form(fields):
+    """Font and Colors' boxes as a profile's MenuTheme (1.5.2): (theme, problems).
+
+    `fields` maps Font, License, Text, Accent, Quiet, Scale and Top to what was
+    typed. An empty box is left out, so the menu keeps its own look for it. A
+    color may be typed with or without its #. `problems` names each box whose
+    value cannot be used, in plain words.
+    """
+    theme, problems = {}, []
+    for key in ("Font", "License"):
+        value = str(fields.get(key, "") or "").strip()
+        if value:
+            theme[key] = value
+    for key, name in (("Text", "Words"), ("Accent", "Chosen item"), ("Quiet", "Quiet lines")):
+        value = str(fields.get(key, "") or "").strip()
+        if not value:
+            continue
+        value = value if value.startswith("#") else "#" + value
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            theme[key] = value.lower()
+        else:
+            problems.append("%s: a color is # and six hex digits, like #e8c25b" % name)
+    scale = str(fields.get("Scale", "") or "").strip()
+    if scale:
+        try:
+            value = round(float(scale), 2)
+        except ValueError:
+            value = None
+        if value is not None and 0.8 <= value <= 1.5:
+            theme["Scale"] = value
+        else:
+            problems.append("Size: a number from 0.8 to 1.5")
+    top = str(fields.get("Top", "") or "").strip()
+    if top:
+        if top.isdigit() and 0 <= int(top) <= 500:
+            theme["Top"] = int(top)
+        else:
+            problems.append("Top line: a whole number from 0 to 500")
+    return theme, problems
+
+
+def menu_theme_saved_line(theme, font_refused=False):
+    """The log's line when Font and Colors is saved (1.5.2): it names only what was set.
+
+    `font_refused` is menu_font_check's answer that the font is not used: the line
+    then does not call it set (the re-run, 4 Nov).
+    """
+    if font_refused:
+        theme = {key: value for key, value in theme.items() if key not in ("Font", "License")}
+    parts = [name for name, keys in (("font", ("Font",)), ("colors", ("Text", "Accent", "Quiet")),
+                                     ("size", ("Scale",)), ("top line", ("Top",)))
+             if any(key in theme for key in keys)]
+    if not parts:
+        return "🎨 The menu keeps its own font and colors."
+    said = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    verb = "is" if len(parts) == 1 and parts[0] != "colors" else "are"
+    return "🎨 The menu's %s %s set. Save Profile keeps %s with this game." % (
+        said, verb, "it" if verb == "is" else "them")
+
+
+# Segoe UI Bold: the menu's words on Windows when the disc has no font of its own.
+MENU_DEFAULT_FONT_FACTS = {"family": "Segoe UI", "ascent": 2210 / 2048, "descent": 514 / 2048}
+
+
+def menu_column_overflow(config, has_bonus, facts=None, factor=1.0):
+    """How far the disc menu's buttons climb above its theme's top line, in pixels of the 1280x720 menu (1.5.2).
+
+    0 when they stay under it. Laid out as the menu lays out its column on a
+    background with its own title: the margin, the room down to the top line,
+    then PLAY, the quiet lines and the headings at the font's line height and
+    the theme's size, and the language box at the foot. Where they need more
+    than the window has, Qt takes the room from above PLAY, so the buttons
+    rise onto the art's title. Counted as the menu shows itself once
+    installed, with the games under PLAY GAMES: its tallest. `facts` is
+    font_facts for the disc's font, or None for the menu's own. `factor` is
+    the menu's scale_factor (1.0 at 96 DPI), in whose pixels the answer is.
+    """
+    theme = config.get("theme") or {}
+    top = theme.get("top", 0)
+    if not config.get("background_has_title") or not top:
+        return 0
+    facts = facts or MENU_DEFAULT_FONT_FACTS
+    scale = theme.get("scale", 1.0)
+
+    def px(n):
+        return int(n * factor)
+
+    def line(size):
+        above, below = facts["ascent"] * size, facts["descent"] * size
+        return max(int(above) + (above > int(above)) + int(below) + (below > int(below)), 14)
+
+    heading = line(int(22 * factor * scale)) + 2 * px(11) + 2 * px(3)  # its type, padding above and below, margins
+    quiet = line(int(14 * factor * scale)) + px(2) + px(6) + px(6)
+    rows = [heading]  # PLAY
+    if config.get("compat_mode") and config.get("compat_args"):
+        rows.append(quiet)
+    if len(config.get("games") or []) > 1:
+        rows.append(quiet * 2)  # the list under PLAY GAMES gives up all but two of its lines first
+    rows += [quiet] * (bool(config.get("mod_launcher")) + bool(config.get("steam_button")))
+    rows += [heading] * (bool(has_bonus) + 2)  # BONUS, UNINSTALL and EXIT
+    language = px(10) + px(30) + px(39)  # its margins and the language box
+    needed = px(50) + max(0, px(top - 50)) + sum(rows) + px(20) + language + px(50)
+    return max(0, needed - int(720 * factor))
 
 
 def oversized_disc_warnings(disc_sizes, budget, media_label):
@@ -1759,6 +2458,8 @@ class RialtoApp:
         # Code Signing settings
         self.sign_final_build = tk.BooleanVar(value=False)
         self.remove_wti_branding = tk.BooleanVar(value=False)
+        # No time limit (1.5.2, issue #4): the long tools run until they finish.
+        self.no_time_limit = tk.BooleanVar(value=True)
 
         # Multi-game disc support: list of {"name": display name, "exe": path
         # relative to the game folder}. Empty list = classic auto-detect.
@@ -1773,12 +2474,22 @@ class RialtoApp:
 
         # Disc target and extras (Rialto 1.5)
         self.target_media_var = tk.StringVar(value="Auto (single disc)")
-        # Beside Target Media (1.5.1): how hard the installer squeezes (B7),
+        # Beside Target Media (1.5.1): how hard the installer compresses (B7),
         # and a disc a plant will press (B5).
         self.compression_var = tk.StringVar(value="Balanced")
         self.pressed_disc_var = tk.BooleanVar(value=False)
+        # A menu background that already shows the game's title (1.5.2): the
+        # menu then draws no shading and no title over it.
+        self.bg_has_title_var = tk.BooleanVar(value=False)
+        # The disc menu's own font and colours (1.5.2): set in Menu Font and
+        # Colors and kept in a profile's "MenuTheme". See menu_theme_config.
+        self.menu_theme = {}
         self.usb_export_var = tk.BooleanVar(value=False)
         self.steam_button_var = tk.BooleanVar(value=True)
+        # The developer's own Steam art (1.5.2), one file for each of
+        # STEAM_ART_PIECES. Empty means Rialto makes that piece itself.
+        for _key, attr, *_rest in self.STEAM_ART_PIECES:
+            setattr(self, attr, tk.StringVar(value=""))
         self.mod_launcher_var = tk.BooleanVar(value=False)
         # The folder holding the mod tool. Empty means "use <game>/mods if
         # it is there", which is how every disc built before the picker
@@ -1995,8 +2706,9 @@ class RialtoApp:
         except Exception:
             pass  # cosmetic only, and older Windows simply has no such thing
 
-    # Disc Extras' two columns (1.5.1, B11): wide enough for both at 1366 by 768, the smallest screen it is tested on.
-    DISC_EXTRAS_WIDTH = 1180
+    # Disc Extras' columns (1.5.1, B11; Steam's own third column, 1.5.2): wide enough for all three at 1366 by 768,
+    # the smallest screen it is tested on, and inside the 1280 across of 1080p at 150 percent.
+    DISC_EXTRAS_WIDTH = 1220
 
     def dialog_height_for(self, requested, work_area_height, title_bar=32):
         """How tall a dialog may be: what it holds (200 at least), never more than the work area less its title bar.
@@ -2026,7 +2738,7 @@ class RialtoApp:
         The three-steps card starts folded to its title on every screen, with
         Show beside it to open it again (his word, 19 Oct 2026: the fold short
         screens had, everywhere; create_widgets). Where the folded page is
-        still more than the window holds (1005 lines, and a 1080p laptop at
+        still more than the window holds (1009 lines, and a 1080p laptop at
         125 percent has 816), the same page is laid out in fewer lines:
         tighten_to_fit.
         """
@@ -2058,13 +2770,13 @@ class RialtoApp:
         taken off the page: the same widgets, read through the same variables,
         in the same order of steps. Chosen once, as Rialto opens, by laying a
         level out and asking Tk what the page then asks for, not from a list of
-        screens. Measured at 96 DPI, card folded: the page as it always was
-        asks 1005 lines; level 1 asks 810 (a 1080p laptop at 125 percent has
-        816), level 2 asks 703 (1366 x 768 has 720) and level 3 asks 655
-        (1080p at 150 percent has 672). A window that holds the folded page is
-        never touched, so a tall screen and 1080p at 100 percent are as they
-        were. Under 655 lines the page is cut as it always was, the log first,
-        and one line in the log says so.
+        screens. Measured at 96 DPI, card folded, with 1.5.2's Menu Music row:
+        the page as it always was asks 1009 lines; level 1 asks 810 (a 1080p
+        laptop at 125 percent has 816), level 2 asks 713 (1366 x 768 has 720)
+        and level 3 asks 665 (1080p at 150 percent has 672). A window that holds
+        the folded page is never touched, so a tall screen and 1080p at 100
+        percent are as they were. Under 665 lines the page is cut as it always
+        was, the log first, and one line in the log says so.
         """
         try:
             for level in range(1, len(self.PAGE_LEVELS) + 1):
@@ -2151,22 +2863,23 @@ class RialtoApp:
         self.meta_frame.grid_columnconfigure(1, weight=1)
 
     def pair_artwork_rows(self):
-        """Step 4 in three rows: Menu Background across the top, the two logos side by side, then the two icons.
+        """Step 4 in four rows: Menu Background and Menu Music across the top, the two logos side by side, then the two icons.
 
-        Five rows become three, read left to right in the order they always
+        Six rows become four, read left to right in the order they always
         had. A box beside another is narrow for a whole path, so it keeps the
         end of its path in view (show_path_end).
         """
-        background, game_logo, company_logo, game_icon, disc_icon = fields = self.art_frame.pack_slaves()
+        background, music, game_logo, company_logo, game_icon, disc_icon = fields = self.art_frame.pack_slaves()
         for field in fields:
             field.pack_forget()
         background.grid(row=0, column=0, columnspan=2, sticky="ew", padx=4)
-        for index, field in enumerate(fields[1:]):
-            field.grid(row=1 + index // 2, column=index % 2, sticky="ew", padx=4)
-        self.align_row_labels([background, game_logo, game_icon])
+        music.grid(row=1, column=0, columnspan=2, sticky="ew", padx=4)
+        for index, field in enumerate(fields[2:]):
+            field.grid(row=2 + index // 2, column=index % 2, sticky="ew", padx=4)
+        self.align_row_labels([background, music, game_logo, game_icon])
         self.align_row_labels([company_logo, disc_icon])
         paths = (self.logo_path_var, self.company_logo_var, self.ico_path_var, self.disc_icon_var)
-        for field, path in zip(fields[1:], paths):
+        for field, path in zip(fields[2:], paths):
             box = field.pack_slaves()[1]
             box.configure(width=8)  # asks for little and is given what the row has, so Browse keeps its whole width
             self.show_path_end(box, path)
@@ -2399,11 +3112,20 @@ class RialtoApp:
             # The window answers during a build now (1.5.1, B6), so it can be
             # closed during one. Ask, and stop the running tool if the answer is yes.
             batch, self._batch = getattr(self, "_batch", None), None  # a real question, even mid-queue
-            asked = self.show_centered_popup(
-                    "A build is running",
-                    "Rialto is still making your disc. Stop the build and close Rialto?\n\n"
-                    "What it has made so far stays in the output folder, unfinished.",
-                    kind="yesno")
+            doing = getattr(self, "_held_doing", None)
+            if doing:
+                # A long tool outside a build (run_tool_held): its own words, not a build's.
+                asked = self.show_centered_popup(
+                        "Rialto is still working",
+                        f"Rialto is still {doing}. Stop it and close Rialto?\n\n"
+                        "What it has done so far stays where it is, unfinished.",
+                        kind="yesno")
+            else:
+                asked = self.show_centered_popup(
+                        "A build is running",
+                        "Rialto is still making your disc. Stop the build and close Rialto?\n\n"
+                        "What it has made so far stays in the output folder, unfinished.",
+                        kind="yesno")
             self._batch = batch
             if not asked:
                 return
@@ -2444,37 +3166,39 @@ class RialtoApp:
 
 
     def load_last_used_profile(self):
+        """The profile Rialto was last given, put on the form at start.
+
+        The same list of settings Load Profile puts on the form (put_profile_on_form):
+        a start that read only some of them opened on Auto (single disc) and
+        Balanced with a CD 700 MB, Fastest install profile, and left its Mac,
+        Linux, mod and bonus rows empty (readiness, 4 Nov). Two things stay as
+        they were at start: this PC's own ticks, and no "pick again" advice,
+        because no game folder is chosen yet to re-point a moved file against.
+
+        last_profile.json keeps the file's name only. Load Profile opens in
+        templates/, so the name is looked for there after Rialto's own folder.
+        """
         if not os.path.exists(LAST_PROFILE_FILE):
             return
 
         try:
             with open(LAST_PROFILE_FILE, "r", encoding="utf-8") as f:
                 last_data = json.load(f)
-                profile_name = last_data.get("last_profile")
-                if not profile_name:
-                    return
+            profile_name = last_data.get("last_profile")
+            if not profile_name:
+                return
 
-                profile_path = os.path.join(APP_ROOT, profile_name)
-                if not os.path.exists(profile_path):
-                    return
+            profile_path = next((p for p in (os.path.join(APP_ROOT, profile_name),
+                                             os.path.join(TEMPLATES_DIR, profile_name))
+                                 if os.path.isfile(p)), None)
+            if not profile_path:
+                return
 
-                with open(profile_path, "r", encoding="utf-8") as pf:
-                    profile_data = sanitize_profile_data(json.load(pf))
-                    for k, v in profile_data.items():
-                        if k in self.entries:
-                            self.entries[k].delete(0, tk.END)
-                            self.entries[k].insert(0, v)
-                    self.bg_path_var.set(profile_data.get("Background", ""))
-                    self.ico_path_var.set(profile_data.get("Icon", ""))
-                    self.disc_icon_var.set(profile_data.get("DiscIcon", ""))
-                    self.disc_name_var.set(profile_data.get("DiscName", ""))
-                    self.game_executables = profile_data.get("GameExecutables", []) or []
-                    self.game_shortcuts = bool(profile_data.get("GameShortcuts", False))
-                    self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]
-                    self.refresh_game_exes_summary()
-
-
-                self.update_status(f"✅ Restored session from {profile_name}")
+            with open(profile_path, "r", encoding="utf-8-sig") as pf:
+                profile_data = sanitize_profile_data(json.load(pf))
+            self.put_profile_on_form(profile_data, at_start=True)
+            self.refresh_disc_meter()
+            self.update_status(f"✅ Restored session from {profile_name}")
 
         except Exception as e:
             self.update_status(f"[!] Failed to load last session: {e}")
@@ -2962,8 +3686,8 @@ class RialtoApp:
         compression_combo.pack(side="left")
         # Fastest install stores the game as it is, so the meter weighs it again.
         compression_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_disc_meter())
-        compression_tip = ("How hard the installer squeezes your game. Balanced suits most games. Smallest "
-                           "disc squeezes hardest, so the build takes longer. Fastest install stores the game "
+        compression_tip = ("How much the installer compresses your game. Balanced suits most games. Smallest "
+                           "disc compresses it the most, so the build takes longer. Fastest install stores the game "
                            "as it is, so setup only copies it, and the disc is bigger, which can mean "
                            "more discs.")
         ToolTip(compression_label, compression_tip)
@@ -2987,15 +3711,46 @@ class RialtoApp:
         img_row.pack(fill="x", padx=4, pady=4)
         ttk.Label(img_row, text="Menu Background:", width=20).pack(side="left", padx=(0, 4), pady=2)
         self.bg_path_var = tk.StringVar()
-        bg_entry = ttk.Entry(img_row, textvariable=self.bg_path_var)
+        # Asks for little and is given what the row has beside the tick box and
+        # Font and Colors (1.5.2), so the end of its path stays in view.
+        bg_entry = ttk.Entry(img_row, textvariable=self.bg_path_var, width=12)
         bg_entry.pack(side="left", fill="x", expand=True)
+        self.show_path_end(bg_entry, self.bg_path_var)
         bg_browse = ttk.Button(img_row, text="Browse", command=self.browse_bg, style="Rounded.TButton")
         bg_browse.pack(side="left", padx=(0, 4), pady=2)
         bg_tip = "The background for your disc's menu: an animated GIF or a still JPG, at 1280x720. GIFs are recommended, and ezgif.com makes one from a video clip."
         ToolTip(img_row, bg_tip)
         ToolTip(bg_entry, bg_tip)
         ToolTip(bg_browse, "Pick a background GIF or JPG from your files.")
+        # On the Menu Background row, not rows of their own (1.5.2): another row
+        # would push the log back under the build bar on a short screen.
+        bg_title_check = self.themed_check(img_row, "Hide the menu's title and logo", self.bg_has_title_var,
+                                           side="left", padx=(6, 0))
+        ToolTip(bg_title_check, "Tick this when your background has the game's name or logo drawn in. The menu "
+                                "then leaves the picture as it is: no dark shading, no game title or Game Logo on "
+                                "top, and the buttons sit at the foot. The Company Logo stays in its corner. "
+                                "Leave Company Logo empty to show none.")
+        menu_theme_btn = ttk.Button(img_row, text="Font and Colors…", command=self.configure_menu_theme,
+                                    style="Rounded.TButton")
+        menu_theme_btn.pack(side="left", padx=(6, 4), pady=2)
+        ToolTip(menu_theme_btn, "The words on your disc's menu: a font of your own with its license, the colors "
+                                "of the words, the chosen item and the quiet lines, their size, and how high the "
+                                "buttons reach. All optional.")
 
+        # menu music (1.5.2): a WAV under the background, played by Windows itself
+        music_row = ttk.Frame(self.art_frame)
+        music_row.pack(fill="x", padx=4, pady=4)
+        ttk.Label(music_row, text="Menu Music:", width=20).pack(side="left", padx=(0, 4), pady=2)
+        self.menu_music_var = tk.StringVar()
+        music_entry = ttk.Entry(music_row, textvariable=self.menu_music_var)
+        music_entry.pack(side="left", fill="x", expand=True)
+        music_browse = ttk.Button(music_row, text="Browse", command=self.browse_menu_music, style="Rounded.TButton")
+        music_browse.pack(side="left", padx=(0, 4), pady=2)
+        music_tip = ("A WAV file that loops under the menu. It stops while the game or Setup runs. Players can "
+                     "turn it off with the Sound button.")
+        ToolTip(music_row, music_tip)
+        ToolTip(music_entry, music_tip)
+        ToolTip(music_browse, "Pick a WAV file from your files.")
 
         # game logo
         logo_row = ttk.Frame(self.art_frame)
@@ -3054,7 +3809,15 @@ class RialtoApp:
         ToolTip(di_entry, di_tip)
         ToolTip(di_browse, "Pick a disc icon file (.ico format).")
 
-
+        # Step 4's buttons as tall as the boxes beside them (1.5.2). Menu Music is
+        # a sixth row, and at their old height it would have pushed every screen
+        # one level tighter (tighten_to_fit), with the log under the build bar on
+        # the shortest.
+        for row in self.art_frame.pack_slaves():
+            for widget in row.pack_slaves():
+                if isinstance(widget, ttk.Button):
+                    widget.configure(padding=(6, 3))
+                    widget.pack_configure(pady=0)
 
 
 
@@ -3198,6 +3961,15 @@ class RialtoApp:
                             "Set it up under Configure Signing; without it the build pauses so you "
                             "can sign by hand.")
 
+        time_check = self.themed_check(check_row, "No time limit", self.no_time_limit,
+                                       surface="header", command=self.save_signing_settings,
+                                       side="left", padx=(0, 18))
+        ToolTip(time_check, "Lets the long steps run until they finish. It starts ticked. Untick it and "
+                            "making the installer and unpacking a GOG installer stop after an hour, "
+                            "writing the disc image and packing an .msix stop after 30 minutes, and "
+                            "signing setup.exe, menu.exe or an .msix stops after 5 minutes. "
+                            "Closing Rialto still stops the step.")
+
         branding_check = self.themed_check(check_row, "Remove WTI Branding", self.remove_wti_branding,
                                            surface="header", command=self.save_signing_settings,
                                            side="left", padx=(0, 18))
@@ -3208,21 +3980,27 @@ class RialtoApp:
         reset_btn = self.icon_button(check_row, "reset", "Restore page",
                                      self.restore_page, size=14)
         reset_btn.pack(side="right")
-        ToolTip(reset_btn, "Returns all values on the page to original defaults. "
-                           "Save your work first!")
+        ToolTip(reset_btn, "Clears every field on the page. Sign Final Build, No time limit, Remove WTI "
+                           "Branding and the MODS button in Disc Extras stay as they are. Save your work first.")
 
     def restore_page(self):
-        """Put every field back to the state a fresh Rialto starts in.
+        """Clear every field on the page.
 
         Touches only what is on this screen. Saved profiles, the signing
         details and anything already built are all left alone, which is why the
-        warning says to save first rather than saying it is destructive.
+        warning says to save first rather than saying it is destructive. So are
+        Sign Final Build, No time limit, Remove WTI Branding and the MODS tick:
+        the question says they stay as they are, and they do (1.5.2). They are
+        not "this PC's" here: Load Profile sets the last two from the profile
+        without writing config.json, so the words say only that they stay.
         """
         if not self.show_centered_popup(
                 "Restore page",
                 "Clear every field on this page and start again?\n\n"
                 "Saved profiles, your signing setup and anything already built are "
-                "not touched. Anything typed here and not saved is lost.",
+                "not touched, and Sign Final Build, No time limit, Remove WTI Branding "
+                "and the MODS button in Disc Extras stay as they are. Anything typed "
+                "here and not saved is lost.",
                 kind="yesno"):
             return
 
@@ -3236,7 +4014,7 @@ class RialtoApp:
 
         for entry in self.entries.values():
             entry.delete(0, tk.END)
-        for var in (self.publisher_text_var, self.disc_name_var, self.bg_path_var,
+        for var in (self.publisher_text_var, self.disc_name_var, self.bg_path_var, self.menu_music_var,
                     self.logo_path_var, self.company_logo_var, self.ico_path_var,
                     self.disc_icon_var, self.mac_build_var, self.linux_build_var,
                     self.bonus_folder_var):
@@ -3249,16 +4027,18 @@ class RialtoApp:
         self.target_media_var.set("Auto (single disc)")
         self.compression_var.set("Balanced")
         self.pressed_disc_var.set(False)
+        self.bg_has_title_var.set(False)
+        self.menu_theme = {}
         self.usb_export_var.set(False)
-        self.sign_final_build.set(False)
-        self.remove_wti_branding.set(False)
-        self.mod_launcher_var.set(False)
         self.mod_folder_var.set("")
         self.steam_button_var.set(True)
+        self.set_steam_art({})
         self.compat_mode_var.set(False)
         self.compat_args_var.set("")
         self.compat_hint_var.set("")
-        self.save_signing_settings()
+        # Sign Final Build, No time limit, Remove WTI Branding and the MODS
+        # tick stay as they are on screen (his word, 4 Nov), and config.json
+        # is not written.
 
         self.refresh_disc_meter()
         self.update_status("↺ Page restored to defaults")
@@ -3315,15 +4095,144 @@ class RialtoApp:
                 total += 40 * 1024 * 1024
         else:
             total += 40 * 1024 * 1024
-        background = self.bg_path_var.get().strip()
-        if background and os.path.isfile(background):
-            try:
-                total += os.path.getsize(background)
-            except OSError:
-                pass
-        # Steam art, logos and the runtime DLLs beside the menu.
+        # The background, the Menu Music and the menu's font.
+        total += self.menu_inside_bytes()
+        # Logos and the runtime DLLs beside the menu. The Steam library art is
+        # weighed by refresh_disc_meter on its worker thread (steam_art_bytes).
         total += 4 * 1024 * 1024
         return total
+
+    def menu_inside_bytes(self):
+        """What the Menu Background, the Menu Music and the menu's font with its license weigh in menu/, in bytes.
+
+        Each is staged only when the build takes it (a video background is
+        refused, menu_music_check, menu_font_check), and is not compressed. menu/
+        rides on the disc root and inside the installer, and no other count
+        knows of these files by where the build puts them, so disc_weights adds
+        the installer's copy from this (1.5.2). The background used to be counted
+        by where its source sat, as one of the extras: one copy too few when it
+        was picked from inside the game folder, and one too many on Fastest
+        install (his word, 4 November 2026: count as the build does).
+        """
+        total = 0
+        background = self.bg_path_var.get().strip()
+        if background and os.path.splitext(background)[1].lower() in VIDEO_EXTENSIONS:
+            background = ""
+        font, licence, _family, _problem = self.menu_font_choice()
+        for staged in (background, self.menu_music_source(), font, licence):
+            if staged:
+                try:
+                    total += os.path.getsize(staged)
+                except OSError:
+                    pass
+        return total
+
+    # What each piece of Steam art weighs in menu/steam/ when Rialto composes it, measured from 1280 x 720 and
+    # 1920 x 1080 photographic backgrounds (1.5.2): the Library Hero at Steam's 3840 x 1240 is 6 to 7 MB of it.
+    # The Library Logo Rialto stages is the Game Logo, and is weighed (steam_logo_bytes).
+    STEAM_ART_ALLOWANCE = {"Capsule": 1024 * 1024, "Header": 1024 * 1024, "Hero": 8 * 1024 * 1024}
+
+    def steam_art_bytes(self, paths, background="", logo_path=""):
+        """What menu/steam/ will weigh, for the meter: each piece as stage_steam_art stages it.
+
+        `paths` is steam_art_paths(), and `background` and `logo_path` are
+        steam_art_sources(). A piece the developer gave counts as the file the
+        build writes from it (steam_piece_bytes). The capsule, header and hero
+        Rialto composes in place of one left empty, or of one the build cannot
+        take, count at their allowance, and only when there is something to
+        compose them from: a background that gives a still, or a logo. The
+        Library Logo Rialto stages is the Game Logo saved again, and counts as
+        that file (steam_logo_bytes). The Shortcut Icon counts only when the
+        developer's is taken.
+        """
+        total, taken = 0, set()
+        for key, *_rest in self.STEAM_ART_PIECES:
+            weight = self.steam_piece_bytes(key, paths[key]) if paths.get(key) else None
+            if weight is not None:
+                total += weight
+                taken.add(key)
+        logo = self.steam_logo_bytes(logo_path) if logo_path else None
+        if logo is not None or "Logo" in taken or self._steam_still_possible(background):
+            total += sum(weight for key, weight in self.STEAM_ART_ALLOWANCE.items() if key not in taken)
+        if logo is not None and "Logo" not in taken:
+            total += logo
+        return total
+
+    def _steam_still_possible(self, background):
+        """Whether _background_still gives a still of `background`, asked without making one, for the meter."""
+        if not background:
+            return False
+        if os.path.splitext(background)[1].lower() in self.STEAM_VIDEO_BACKGROUNDS:
+            return shutil.which("ffmpeg") is not None
+        try:
+            with Image.open(background):
+                return True
+        except Exception:
+            return False
+
+    def _steam_weighed(self, kind, path, weigh):
+        """weigh()'s answer for one file, kept by `kind` and the file's place, size and time, or None when it is gone.
+
+        So each file is written out once for the meter however often the meter
+        is drawn, and two measures that ask for the same file at once wait for
+        the one weighing rather than writing it twice.
+        """
+        try:
+            facts = os.stat(path)
+        except OSError:
+            return None
+        mark = (kind, os.path.normcase(os.path.abspath(path)), facts.st_size, facts.st_mtime_ns)
+        weights = self.__dict__.setdefault("_steam_piece_weights", {})
+        with self.__dict__.setdefault("_steam_piece_locks", {}).setdefault(mark, threading.Lock()):
+            if mark not in weights:
+                weights[mark] = weigh()
+            return weights[mark]
+
+    def steam_piece_bytes(self, key, path):
+        """What one piece of the developer's Steam art weighs in menu/steam/, in bytes, or None.
+
+        The file the build writes is not the file given: a JPG is written again
+        at quality 95, a still WebP or a GIF as a PNG, an animation frame by
+        frame, an .ico from its own pictures. So the piece is read and written
+        as stage_steam_art does it, into a folder of its own, and that file is
+        weighed. None when the build would not take it and makes that piece
+        itself. Weighed once for each file (_steam_weighed). Never touches the
+        window, so it runs on the meter's worker thread.
+        """
+        def weigh():
+            picture = None
+            try:
+                picture, filename, problem, _note = self.read_steam_piece(key, path)
+                if problem:
+                    return None
+                if filename.endswith(".ico"):
+                    icon = self._ico_as_given(path)
+                    return len(icon) if icon is not None else None
+                with tempfile.TemporaryDirectory(prefix="rialto_steam_meter_") as folder:
+                    target = os.path.join(folder, filename)
+                    self._write_steam_piece(picture, target)
+                    return os.path.getsize(target)
+            except Exception:
+                return None  # the build says why, and makes the piece
+            finally:
+                if picture is not None:
+                    picture.close()
+        return self._steam_weighed(key, path, weigh)
+
+    def steam_logo_bytes(self, logo_path):
+        """What logo.png weighs when the build stages the Game Logo as the Library Logo, or None when it cannot."""
+        def weigh():
+            logo = self._steam_game_logo(logo_path)
+            if logo is None:
+                return None
+            try:
+                with tempfile.TemporaryDirectory(prefix="rialto_steam_meter_") as folder:
+                    target = os.path.join(folder, "logo.png")
+                    logo.save(target, "PNG")
+                    return os.path.getsize(target)
+            except Exception:
+                return None
+        return self._steam_weighed("Game Logo", logo_path, weigh)
 
     def refresh_disc_meter(self):
         """Re-measure the game folder and redraw the fill, off the UI thread.
@@ -3334,35 +4243,47 @@ class RialtoApp:
         """
         if not hasattr(self, "disc_bar"):
             return
+        # Each refresh is a turn. A measure a later turn has overtaken, such as one still writing out a long
+        # animated Library Hero after Add to Steam is unticked, finishes without touching the meter.
+        self._meter_turn = turn = getattr(self, "_meter_turn", 0) + 1
         path = self.current_game_path
         if not path or not os.path.isdir(path):
             self._fill_bytes = 0
             self.draw_disc_meter()
             return
 
+        # The Menu Background is not one of these: it is counted in menu/, where the build puts it.
         extras = [v.get().strip() for v in
-                  (self.bg_path_var, self.logo_path_var, self.company_logo_var,
-                   self.ico_path_var, self.disc_icon_var, self.mac_build_var,
-                   self.linux_build_var, self.bonus_folder_var)]
+                  (self.logo_path_var, self.company_logo_var,
+                   self.ico_path_var, self.disc_icon_var, self.bonus_folder_var)]
 
         # What the disc carries beyond the game folder, and what it carries
         # twice. The meter used to weigh the source folder and stop there,
         # which could read well under the finished disc - the author
         # is told it fits on a CD when it needs a DVD.
-        duplicated = []
-        if self.mod_launcher_var.get():
-            duplicated.append(self.resolved_mod_dir())
-        duplicated.append(self.resolved_bonus_dir())
-        duplicated.extend([self.mac_build_var.get().strip(),
-                           self.linux_build_var.get().strip()])
+        duplicated = [self.resolved_bonus_dir()]
+        mod = self.resolved_mod_dir() if self.mod_launcher_var.get() else ""
+        # The Mac and Linux builds, each with the name its archive's folder takes.
+        stem = self.unix_archive_stem()
+        builds = [(label, var.get().strip(), "%s-%s" % (stem, label))
+                  for var, label in ((self.mac_build_var, "Mac"), (self.linux_build_var, "Linux"))]
         menu_extra = self.menu_staging_bytes()
+        menu_inside = self.menu_inside_bytes()
         icons = [self.ico_path_var.get().strip(), self.disc_icon_var.get().strip()]
         stored = getattr(self, "compression_var", None) is not None and \
             self.compression_var.get() == "Fastest install"
+        # The Steam library art, staged in menu/ only while Add to Steam is ticked, and what Rialto composes it from.
+        steam = self.steam_art_paths() if self.steam_button_var.get() else None
+        steam_sources = self.steam_art_sources() if steam is not None else ("", "")
 
         def measure():
-            self._fill_bytes, self._disc1_bytes = self.disc_weights(path, extras, duplicated, menu_extra,
-                                                                    icons, stored)
+            # Here, not on the UI thread: the developer's pieces are written out as the build writes them.
+            steam_bytes = self.steam_art_bytes(steam, *steam_sources) if steam is not None else 0
+            weights = self.disc_weights(path, extras, duplicated, menu_extra + steam_bytes, icons, stored,
+                                        menu_inside + steam_bytes, builds, mod)
+            if turn != self._meter_turn:
+                return  # a later refresh is measuring what the form holds now
+            self._fill_bytes, self._disc1_bytes = weights
             try:
                 self.root.after(0, self.draw_disc_meter)
             except (RuntimeError, tk.TclError):
@@ -3370,12 +4291,28 @@ class RialtoApp:
 
         threading.Thread(target=measure, daemon=True).start()
 
-    def disc_weights(self, path, extras, duplicated, menu_extra, icons=(), stored=False):
+    def disc_weights(self, path, extras, duplicated, menu_extra, icons=(), stored=False, menu_inside=0,
+                     builds=(), mod=""):
         """(what the disc holds, what of it rides on Disc 1 beside the installer's slices), in bytes.
 
         Never touches the window, so it runs on the meter's worker thread. `duplicated` are the folders that
-        go on the disc root and inside the installer (mods, bonus, Mac, Linux); `menu_extra` is
-        menu_staging_bytes(); `icons` the game and disc icons; `stored` is Fastest install.
+        go on the disc root and inside the installer (the bonus folder); `menu_extra` is
+        menu_staging_bytes() with steam_art_bytes(); `icons` the game and disc icons; `stored` is Fastest
+        install; `menu_inside` is menu_inside_bytes(), the Menu Background, the Menu Music and the menu's
+        font, with steam_art_bytes(), the Steam library art in menu/steam/: the installer carries these a
+        second time in its menu/ (1.5.2). That
+        copy is counted by what the build makes, never by where the source file sits: a WAV picked from the
+        game folder or the bonus folder is in the installer there as well.
+
+        Counted as the build places them (his word, 4 November 2026). `builds` are the Mac and Linux builds,
+        each (Mac or Linux, its folder, the name of its archive's folder): stage_universal_builds puts each on
+        the disc root once, after ISCC has made the installer, packed as unix_build_bytes weighs it. One inside
+        the game folder is in the installer too, as part of the game folder. They were counted twice from
+        beside the game, as the source tree. A folder named Mac or Linux at the game folder's root goes on the
+        disc root as it is when no build takes its place. `mod` is the mod folder the build stages while Mod
+        Launcher is ticked, as stage_mod_launcher does: copied into the installer and onto the disc root when
+        the game folder does not already hold it under its own name, and onto the disc root alone when it
+        does. One beside the game was counted once.
 
         Disc 1 is weighed as create_spanned_isos fills it (bugs review, 1.5.1): the menu folder, the disc-root
         copies of the duplicated folders, setup.exe, autorun.inf, the READMEs and the icons, each file in
@@ -3409,25 +4346,39 @@ class RialtoApp:
                         pass
             return total
 
-        def inside_game(extra):
-            # A folder beside the game whose name starts the same ("Demo Linux" beside "Demo") is not in it.
-            try:
-                return os.path.commonpath([os.path.abspath(extra), os.path.abspath(path)]) == os.path.abspath(path)
-            except ValueError:
-                return False
+        # Every file the game folder and the extras bring is counted once (1.5.2), by where it really is. A bonus
+        # or mod folder inside the game folder that the profile also names was counted again whenever the two
+        # paths were spelled differently (d: and D:, the game folder opened through a link), and so was one file
+        # the profile names twice (the same .ico for the game icon and the disc icon).
+        game_real = os.path.join(os.path.normcase(os.path.realpath(path)), "")
+        counted = set()
+
+        def extra_size(extra):
+            real = os.path.realpath(extra)
+            if os.path.isfile(real):
+                walked = [(os.path.dirname(real), [os.path.basename(real)])]
+            else:
+                walked = ((root_dir, files) for root_dir, _dirs, files in os.walk(real))
+            total = 0
+            for root_dir, files in walked:
+                for name in files:
+                    file_path = os.path.join(root_dir, name)
+                    key = os.path.normcase(file_path)
+                    # Inside the game folder: already counted with it. A folder beside the game whose name
+                    # starts the same ("Demo Linux" beside "Demo") is not in it.
+                    if key.startswith(game_real) or key in counted:
+                        continue
+                    counted.add(key)
+                    try:
+                        total += os.path.getsize(file_path)
+                    except OSError:
+                        pass
+            return total
 
         total = folder_size(path)
         for extra in extras:
-            # Art already inside the game folder is counted once, not twice
-            if not extra or inside_game(extra):
-                continue
-            if os.path.isfile(extra):
-                try:
-                    total += os.path.getsize(extra)
-                except OSError:
-                    pass
-            elif os.path.isdir(extra):
-                total += folder_size(extra)
+            if extra and (os.path.isfile(extra) or os.path.isdir(extra)):
+                total += extra_size(extra)
 
         # These ride on the disc root AND inside the installer, so they
         # land on the media twice however they were counted above.
@@ -3436,6 +4387,34 @@ class RialtoApp:
             if folder and os.path.isdir(folder):
                 total += folder_size(folder)
                 disc1 += folder_on_disc(folder)
+
+        if mod and os.path.isdir(mod):
+            in_game = os.path.join(path, os.path.basename(os.path.normpath(mod)))
+            try:
+                inside_game = os.path.commonpath(
+                    [os.path.realpath(path), os.path.realpath(mod)]) == os.path.realpath(path)
+            except (ValueError, OSError):
+                inside_game = False
+            if not (inside_game and os.path.isdir(in_game)):
+                # Copied into the output before ISCC, over any folder of that name the game folder brought.
+                if os.path.isdir(in_game):
+                    total -= folder_size(in_game)
+                total += folder_size(mod)
+                in_game = mod
+            # The disc root carries whatever sits in the output under the mod folder's name.
+            total += folder_size(in_game)
+            disc1 += folder_on_disc(in_game)
+
+        for label, folder, archive_root in builds:
+            if folder and os.path.isdir(folder):
+                weight, sectors = self.unix_build_bytes(folder, archive_root)
+                total += weight
+                disc1 += sectors
+            elif os.path.isdir(os.path.join(path, label)):
+                # The game folder's own Mac or Linux folder: copied into the output with the game, and the
+                # disc root takes every folder of that name.
+                total += folder_size(os.path.join(path, label))
+                disc1 += folder_on_disc(os.path.join(path, label))
 
         # The icons on the disc root: the ones picked, and every .ico at the game folder's root, which the
         # build copies beside setup.exe.
@@ -3456,6 +4435,9 @@ class RialtoApp:
         if stored:
             fill += (max(menu_extra - self.RUNTIME_ALLOWANCE, 0) + self.RUNTIME_STORED - self.RUNTIME_ALLOWANCE
                      + self.DISC1_FILES_ALLOWANCE + icon_bytes)
+        else:
+            # Fastest install counts the whole menu a second time above, these files with it.
+            fill += menu_inside
         return fill, disc1
 
     def draw_disc_meter(self):
@@ -3506,12 +4488,18 @@ class RialtoApp:
                 text = "%d MB of %d MB usable on %s - %d%%" % (
                     total // 1_000_000, usable // 1_000_000, label, percent)
             if fraction > 1.0:
-                discs = int(total // usable) + 1
-                if mini:
-                    base = min(getattr(self, "_disc1_bytes", 0), total)
-                    discs = spanned_disc_count(base, total - base, capacity,
-                                               self.MEDIA_RESERVE, self.SPAN_MARGIN)
-                text += " - about %d discs" % discs
+                # Counted as create_spanned_isos packs the set, on every media: the flat
+                # total over the usable size, plus one, called a 3-disc set 4 (readiness, 4 Nov).
+                base = min(getattr(self, "_disc1_bytes", 0), total)
+                discs = spanned_disc_count(base, total - base, capacity, self.MEDIA_RESERVE, self.SPAN_MARGIN)
+                if discs > 1:
+                    text += " - about %d discs" % discs
+                    # Balanced and Smallest disc are weighed as the game is, before the
+                    # installer compresses it, so the set the build makes can be smaller
+                    # (his word, 4 Nov). Fastest install stores it as it is.
+                    choice = self.compression_var.get() if hasattr(self, "compression_var") else "Balanced"
+                    if choice != "Fastest install":
+                        text += ", fewer once compressed"
 
         self.disc_fill_var.set(text)
 
@@ -3575,6 +4563,8 @@ class RialtoApp:
         
         # Load signing settings
         self.sign_final_build.set(self.config.get("sign_final_build", False))
+        # Ticked unless this PC unticked it (his word, 4 Nov 2026: on by default).
+        self.no_time_limit.set(self.config.get("no_time_limit") is not False)
         self.remove_wti_branding.set(self.config.get("remove_wti_branding", False))
         self.mod_launcher_var.set(self.config.get("mod_launcher", False))
 
@@ -3608,6 +4598,10 @@ class RialtoApp:
         
         # Add the additional settings
         profile_data["Background"] = self.bg_path_var.get()
+        profile_data["BackgroundHasTitle"] = bool(self.bg_has_title_var.get())
+        if getattr(self, "menu_theme", None):
+            profile_data["MenuTheme"] = dict(self.menu_theme)
+        profile_data["MenuMusic"] = self.menu_music_var.get()
         profile_data["Logo"] = self.logo_path_var.get()
         profile_data["CompanyLogo"] = self.company_logo_var.get()
         profile_data["PublisherText"] = self.publisher_text_var.get()
@@ -3624,6 +4618,7 @@ class RialtoApp:
         profile_data["MacBuild"] = self.mac_build_var.get()
         profile_data["LinuxBuild"] = self.linux_build_var.get()
         profile_data["SteamButton"] = bool(self.steam_button_var.get())
+        profile_data["SteamArt"] = self.steam_art_paths()
         profile_data["ModLauncher"] = bool(self.mod_launcher_var.get())
         profile_data["ModFolder"] = self.mod_folder_var.get()
         profile_data["CompatibilityMode"] = bool(self.compat_mode_var.get())
@@ -3651,6 +4646,74 @@ class RialtoApp:
         if file_path:
             self.apply_profile_file(file_path)
 
+    # The two header ticks kept per PC in config.json the moment they are clicked
+    # (save_signing_settings). The start leaves them as load_config set them: a
+    # profile saved before the tick, or one without the key, would untick
+    # Remove WTI Branding and put the bird back on the next disc (readiness, 4 Nov).
+    PC_TICKS = ("RemoveWTIBranding", "ModLauncher")
+
+    def put_profile_on_form(self, profile_data, at_start=False):
+        """Every setting a profile keeps, on the form: Load Profile's, each Build Queue row's and the start's.
+
+        `profile_data` has been through sanitize_profile_data. `at_start` is the
+        start (load_last_used_profile): it keeps this PC's own ticks (PC_TICKS),
+        and the Game Logo the last session put back, as the start always has.
+        """
+        # Load the essential fields
+        for k, v in profile_data.items():
+            if k in self.entries:
+                self.entries[k].delete(0, tk.END)
+                self.entries[k].insert(0, v)
+
+        # Load additional settings
+        self.bg_path_var.set(profile_data.get("Background", ""))
+        if not at_start:
+            self.logo_path_var.set(profile_data.get("Logo", ""))
+        self.company_logo_var.set(profile_data.get("CompanyLogo", ""))
+        # A stored copyright line wins and stops auto-filling. An empty
+        # one does not: writing "" over the line the Developer field
+        # had just generated left the box blank with a developer named
+        # right above it.
+        stored_copyright = (profile_data.get("PublisherText") or "").strip()
+        if stored_copyright:
+            self.publisher_text_var.set(stored_copyright)
+            self._auto_copyright = False
+        else:
+            self._auto_copyright = True
+            self._regenerate_copyright()
+        self.ico_path_var.set(profile_data.get("Icon", ""))
+        self.disc_icon_var.set(profile_data.get("DiscIcon", ""))
+        self.disc_name_var.set(profile_data.get("DiscName", ""))
+        if not at_start:
+            self.remove_wti_branding.set(profile_data.get("RemoveWTIBranding", False))
+        self.game_executables = profile_data.get("GameExecutables", []) or []
+        self.game_shortcuts = bool(profile_data.get("GameShortcuts", False))
+        self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]
+        self.refresh_game_exes_summary()
+        self.target_media_var.set(profile_data.get("TargetMedia", "Auto (single disc)"))
+        compression = profile_data.get("Compression", "Balanced")
+        self.compression_var.set(compression if compression in dict(COMPRESSION_CHOICES) else "Balanced")
+        self.pressed_disc_var.set(bool(profile_data.get("PressedDisc", False)))
+        # The menu's own settings (1.5.2): a start that skipped them would
+        # lose them unseen, and the next Save Profile would write them out
+        # of the file.
+        self.bg_has_title_var.set(bool(profile_data.get("BackgroundHasTitle", False)))
+        theme = profile_data.get("MenuTheme")
+        self.menu_theme = dict(theme) if isinstance(theme, dict) else {}
+        self.menu_music_var.set(profile_data.get("MenuMusic", "") or "")
+        self.mac_build_var.set(profile_data.get("MacBuild", ""))
+        self.linux_build_var.set(profile_data.get("LinuxBuild", ""))
+        self.steam_button_var.set(profile_data.get("SteamButton", True))
+        # The Steam art (1.5.2) is Step 4's art for the Steam library: it comes back with it.
+        self.set_steam_art(profile_data.get("SteamArt"))
+        if not at_start:
+            self.mod_launcher_var.set(profile_data.get("ModLauncher", False))
+        self.mod_folder_var.set(profile_data.get("ModFolder", ""))
+        self.compat_mode_var.set(profile_data.get("CompatibilityMode", False))
+        self.compat_args_var.set(profile_data.get("CompatibilityArgs", ""))
+        self.compat_hint_var.set(profile_data.get("CompatibilityHint", ""))
+        self.bonus_folder_var.set(profile_data.get("BonusFolder", ""))
+
     def apply_profile_file(self, file_path, remember=True):
         """Put one profile file on the form: Load Profile's work, and each Build Queue row's (B1).
 
@@ -3659,55 +4722,14 @@ class RialtoApp:
         """
         if file_path:
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8-sig") as f:
                     profile_data = sanitize_profile_data(json.load(f))
-                
-                # Load the essential fields
-                for k, v in profile_data.items():
-                    if k in self.entries:
-                        self.entries[k].delete(0, tk.END)
-                        self.entries[k].insert(0, v)
-                
-                # Load additional settings
-                self.bg_path_var.set(profile_data.get("Background", ""))
-                self.logo_path_var.set(profile_data.get("Logo", ""))
-                self.company_logo_var.set(profile_data.get("CompanyLogo", ""))
-                # A stored copyright line wins and stops auto-filling. An empty
-                # one does not: writing "" over the line the Developer field
-                # had just generated left the box blank with a developer named
-                # right above it.
-                stored_copyright = (profile_data.get("PublisherText") or "").strip()
-                if stored_copyright:
-                    self.publisher_text_var.set(stored_copyright)
-                    self._auto_copyright = False
-                else:
-                    self._auto_copyright = True
-                    self._regenerate_copyright()
-                self.ico_path_var.set(profile_data.get("Icon", ""))
-                self.disc_icon_var.set(profile_data.get("DiscIcon", ""))
-                self.disc_name_var.set(profile_data.get("DiscName", ""))
-                self.remove_wti_branding.set(profile_data.get("RemoveWTIBranding", False))
-                self.game_executables = profile_data.get("GameExecutables", []) or []
-                self.game_shortcuts = bool(profile_data.get("GameShortcuts", False))
-                self.placed_files = [r for r in profile_data.get("PlacedFiles", []) or [] if isinstance(r, dict)]
-                self.refresh_game_exes_summary()
-                self.target_media_var.set(profile_data.get("TargetMedia", "Auto (single disc)"))
-                compression = profile_data.get("Compression", "Balanced")
-                self.compression_var.set(compression if compression in dict(COMPRESSION_CHOICES) else "Balanced")
-                self.pressed_disc_var.set(bool(profile_data.get("PressedDisc", False)))
-                self.mac_build_var.set(profile_data.get("MacBuild", ""))
-                self.linux_build_var.set(profile_data.get("LinuxBuild", ""))
-                self.steam_button_var.set(profile_data.get("SteamButton", True))
-                self.mod_launcher_var.set(profile_data.get("ModLauncher", False))
-                self.mod_folder_var.set(profile_data.get("ModFolder", ""))
-                self.compat_mode_var.set(profile_data.get("CompatibilityMode", False))
-                self.compat_args_var.set(profile_data.get("CompatibilityArgs", ""))
-                self.compat_hint_var.set(profile_data.get("CompatibilityHint", ""))
+
+                self.put_profile_on_form(profile_data)
                 # A profile written against a different input root brings
                 # absolute paths with it. Re-point them at the game folder
                 # in use now, rather than passing over them at build time.
                 self.rebase_stale_paths()
-                self.bonus_folder_var.set(profile_data.get("BonusFolder", ""))
                 self.refresh_disc_meter()
 
                 self.update_status(f"✅ Profile loaded: {os.path.basename(file_path)}")
@@ -3715,25 +4737,45 @@ class RialtoApp:
                 # A profile stores absolute paths, so one saved before the game
                 # moved will quietly point at art that is no longer there. Say
                 # so on load rather than at the end of a build.
-                stale = [(label, var.get().strip()) for label, var in (
-                    ("Menu Background", self.bg_path_var),
-                    ("Game Logo", self.logo_path_var),
-                    ("Company Logo", self.company_logo_var),
-                    ("Game Icon", self.ico_path_var),
-                    ("Disc Icon", self.disc_icon_var),
-                ) if var.get().strip() and not os.path.exists(var.get().strip())]
+                stale = [(label, path) for label, path in (
+                    ("Menu Background", self.bg_path_var.get().strip()),
+                    ("Menu Music", self.menu_music_var.get().strip()),
+                    ("Game Logo", self.logo_path_var.get().strip()),
+                    ("Company Logo", self.company_logo_var.get().strip()),
+                    ("Game Icon", self.ico_path_var.get().strip()),
+                    ("Disc Icon", self.disc_icon_var.get().strip()),
+                ) + tuple((name, getattr(self, attr).get().strip())
+                          for _key, attr, name, *_rest in self.STEAM_ART_PIECES)
+                  + tuple((label, self.menu_theme_path(key)) for key, label in self.REBASEABLE_THEME_FILES)
+                    if path and not os.path.exists(path)]
                 for label, path in stale:
                     self.update_status(f"⚠️ {label} in this profile no longer exists: {path}")
                 # What happens next, said truly for each (1.5.1, end-to-end runs): the build will not
-                # start without a menu background and a game icon; the rest it builds without.
+                # start without a menu background and a game icon; the rest it builds without, and a
+                # missing piece of Steam art comes from Step 4's art, as it does when none was given.
+                steam_names = [name for _key, _attr, name, *_rest in self.STEAM_ART_PIECES]
+                font_names = [label for _key, label in self.REBASEABLE_THEME_FILES]
                 needed = [label for label, _p in stale if label in ("Menu Background", "Game Icon")]
-                optional = [label for label, _p in stale if label not in needed]
+                steam = [label for label, _p in stale if label in steam_names]
+                font_gone = [label for label, _p in stale if label in font_names]
+                optional = [label for label, _p in stale
+                            if label not in needed and label not in steam and label not in font_gone]
                 if needed:
                     self.update_status("   Pick %s again under Step 4: the build cannot start without %s."
                                        % (" and ".join(needed), "them" if len(needed) > 1 else "it"))
                 if optional:
                     self.update_status("   Pick %s again, or the disc is built without %s."
                                        % (", ".join(optional), "them" if len(optional) > 1 else "it"))
+                if steam and self.steam_button_var.get():
+                    self.update_status("   Pick %s again in Disc Extras, or Steam gets what Rialto makes "
+                                       "from your Step 4 art." % ", ".join(steam))
+                elif steam:
+                    # Without Add to Steam no Steam art goes on the disc, and Disc Extras hides its rows.
+                    self.update_status("   Add to Steam is off, so no Steam art goes on the disc. If you tick it, "
+                                       "pick %s again in Disc Extras." % ", ".join(steam))
+                if font_gone:
+                    self.update_status("   Pick %s again in Font and Colors, or the menu uses its own font."
+                                       % " and ".join(font_gone))
                 
                 # Save as last used profile
                 if remember:
@@ -4551,7 +5593,7 @@ class RialtoApp:
             if str(profile).startswith(("\\\\", "//")):
                 return os.path.basename(str(profile)), "?"  # never opened: a network share
             try:
-                with open(profile, encoding="utf-8") as f:
+                with open(profile, encoding="utf-8-sig") as f:
                     data = sanitize_profile_data(json.load(f))
                 return str(data.get("Title") or os.path.basename(profile)), str(data.get("TargetMedia") or "Auto (single disc)")
             except (OSError, ValueError):
@@ -4663,7 +5705,7 @@ class RialtoApp:
             if not path:
                 return
             try:
-                with open(path, encoding="utf-8") as f:
+                with open(path, encoding="utf-8-sig") as f:
                     data = sanitize_profile_data(json.load(f))
             except (OSError, ValueError) as e:
                 self.update_status(f"❌ Could not read that queue: {e}")
@@ -4791,6 +5833,167 @@ class RialtoApp:
         default = self.default_bonus_dir()
         return default if default and os.path.isdir(default) else ""
 
+    def configure_menu_theme(self):
+        """Font and Colors (1.5.2): the disc menu's own font, its three colors, their size and the top line.
+
+        Opened from Font and Colors… on the Menu Background row. Every box may
+        stay empty, and an empty one leaves the menu's own look. Save keeps it
+        all in self.menu_theme, which a profile saves as "MenuTheme" and the
+        build reads through menu_theme_config.
+        """
+        theme = self.current_theme()
+        dialog, body = self.themed_dialog(
+            "Font and Colors",
+            "The words on your disc's menu: their font, their colors and their size",
+            width=640, height=520)
+        button_row = tk.Frame(body, bg=theme["bg"])
+        button_row.pack(side="bottom", fill="x", padx=12, pady=(4, 12))
+
+        tk.Label(body, bg=theme["bg"], fg=theme["fg"], justify="left", anchor="w", font=("Segoe UI", 10),
+                 wraplength=600,
+                 text=("All of this is optional. Leave a box empty and the menu keeps its own look for it: "
+                       "white words in Windows' own font.")).pack(fill="x", padx=12, pady=(10, 6))
+
+        raw = dict(self.menu_theme) if isinstance(getattr(self, "menu_theme", None), dict) else {}
+        fields = {key: tk.StringVar(value="" if raw.get(key) is None else str(raw.get(key)))
+                  for key in ("Font", "License", "Text", "Accent", "Quiet", "Scale", "Top")}
+        form = tk.Frame(body, bg=theme["bg"])
+        form.pack(fill="x", padx=12, pady=4)
+        form.grid_columnconfigure(1, weight=1)
+
+        def label(row, text):
+            tk.Label(form, text=text, bg=theme["bg"], fg=theme["fg"], width=13, anchor="w").grid(
+                row=row, column=0, sticky="w", pady=3)
+
+        def theme_path(key):
+            path = fields[key].get().strip()
+            if path and not os.path.isabs(path) and self.current_game_path:
+                path = os.path.join(self.current_game_path, path)
+            return path
+
+        def pick_file(key, title, types):
+            start = os.path.dirname(theme_path(key) or theme_path("Font")) or self.current_game_path or INPUT_DIR
+            path = filedialog.askopenfilename(parent=dialog, title=title, initialdir=start, filetypes=types)
+            if path:
+                fields[key].set(os.path.normpath(path))
+
+        font_tips = {
+            "Font": "A .ttf or .otf font file for the menu's words. It goes on the disc only with its license.",
+            "License": "The font's license, such as OFL.txt. Leave it empty when the license sits beside the "
+                       "font file: Rialto finds it there.",
+        }
+        for row, (key, text, title, types) in enumerate((
+                ("Font", "Font:", "Pick the menu's font", [("Fonts", "*.ttf *.otf")]),
+                ("License", "Font license:", "Pick the font's license", [("License", "*.txt *.md"),
+                                                                       ("All files", "*.*")]))):
+            label(row * 2, text)
+            entry = ttk.Entry(form, textvariable=fields[key])
+            entry.grid(row=row * 2, column=1, sticky="ew", pady=3)
+            browse = ttk.Button(form, text="Browse", style="Rounded.TButton",
+                                command=lambda k=key, t=title, ty=types: pick_file(k, t, ty))
+            browse.grid(row=row * 2, column=2, columnspan=2, sticky="w", padx=(6, 0), pady=3)
+            ToolTip(entry, font_tips[key])
+            ToolTip(browse, "Pick the file from your PC.")
+            if key == "Font":
+                font_note = tk.Label(form, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                                     font=("Segoe UI", 9), wraplength=470)
+                font_note.grid(row=1, column=1, columnspan=3, sticky="ew", pady=(0, 4))
+
+        def refresh_font_note(*_args):
+            font = theme_path("Font")
+            if not font:
+                font_note.configure(text="No font chosen: the menu uses its own.")
+                return
+            font, licence, family, problem = menu_font_check(font, theme_path("License"))
+            if problem:
+                font_note.configure(text="This font is not used, so the menu uses its own: %s." % problem)
+            else:
+                font_note.configure(text='The menu loads this font as "%s". Its license, %s, goes on the disc '
+                                         'with it.' % (family, os.path.basename(licence)))
+
+        for key in ("Font", "License"):
+            fields[key].trace_add("write", refresh_font_note)
+        refresh_font_note()
+
+        def pick_color(key, what):
+            from tkinter import colorchooser
+            start = fields[key].get().strip()
+            start = start if re.fullmatch(r"#[0-9a-fA-F]{6}", start) else None
+            _rgb, chosen = colorchooser.askcolor(color=start, parent=dialog, title="The color of " + what)
+            if chosen:
+                fields[key].set(chosen.lower())
+
+        def show_color(key, swatch):
+            value = fields[key].get().strip()
+            try:
+                swatch.configure(bg=value if re.fullmatch(r"#[0-9a-fA-F]{6}", value) else theme["bg"])
+            except tk.TclError:
+                pass  # the dialog is closing
+
+        for row, (key, text, what, tip) in enumerate((
+                ("Text", "Words:", "the words",
+                 "The color of the menu's words, as # and six hex digits, like #f1e4cf."),
+                ("Accent", "Chosen item:", "the chosen item",
+                 "The color of the item the player is on, and of the bar beside it, like #e8c25b."),
+                ("Quiet", "Quiet lines:", "the quiet lines",
+                 "The color of the smaller lines under PLAY: the games, compatibility mode, Mods and "
+                 "Add to Steam, and the language box's label.")), start=4):
+            label(row, text)
+            line = tk.Frame(form, bg=theme["bg"])  # the box, the color it names and Pick, side by side
+            line.grid(row=row, column=1, columnspan=3, sticky="w", pady=3)
+            entry = ttk.Entry(line, textvariable=fields[key], width=12)
+            entry.pack(side="left")
+            swatch = tk.Label(line, width=4, bg=theme["bg"], relief="solid", bd=1)
+            swatch.pack(side="left", fill="y", padx=(6, 0), pady=2)
+            pick = ttk.Button(line, text="Pick…", style="Rounded.TButton",
+                              command=lambda k=key, w=what: pick_color(k, w))
+            pick.pack(side="left", padx=(6, 0))
+            fields[key].trace_add("write", lambda *_a, k=key, sw=swatch: show_color(k, sw))
+            show_color(key, swatch)
+            ToolTip(entry, tip)
+            ToolTip(pick, "Pick the color from Windows' color chooser.")
+
+        for row, (key, text, tip) in enumerate((
+                ("Scale", "Size:",
+                 "How big the menu's words are against its own size: 0.8 to 1.5. A font that runs small "
+                 "reads better a little bigger."),
+                ("Top", "Top line:",
+                 "With Hide the menu's title and logo ticked: the highest the buttons reach, in pixels down "
+                 "from the top of the 1280x720 menu, 0 to 500, so they stay under the title in your "
+                 "background.")), start=7):
+            label(row, text)
+            entry = ttk.Entry(form, textvariable=fields[key], width=12)
+            entry.grid(row=row, column=1, sticky="w", pady=3)
+            ToolTip(entry, tip)
+
+        def use_own():
+            for var in fields.values():
+                var.set("")
+
+        def save_and_close():
+            kept, problems = menu_theme_from_form({key: var.get() for key, var in fields.items()})
+            if problems:
+                self.show_centered_popup("Some boxes cannot be used",
+                                         "Change these, or leave them empty for the menu's own look:\n\n"
+                                         + "\n".join(problems))
+                return
+            self.menu_theme = kept
+            self._theme_drop_said = None  # a changed theme says what it leaves out again, once
+            _font, _licence, _family, problem = self.menu_font_choice()
+            if kept.get("Font") and problem:
+                self.update_status("⚠️ The menu's font is not used, so the menu uses its own: %s." % problem)
+            self.update_status(menu_theme_saved_line(kept, font_refused=bool(problem)))
+            dialog.destroy()
+            self.refresh_disc_meter()  # the font and its license ride in menu/
+
+        own_btn = ttk.Button(button_row, text="Use the Menu's Own", command=use_own, style="Rounded.TButton")
+        own_btn.pack(side="left")
+        ToolTip(own_btn, "Empties every box, so the menu keeps its own font, colors and size. Save keeps that.")
+        ttk.Button(button_row, text="Save", command=save_and_close, style="Primary.TButton").pack(side="right", padx=4)
+        ttk.Button(button_row, text="Cancel", command=dialog.destroy, style="Rounded.TButton").pack(side="right", padx=4)
+        self.fit_dialog_to_screen(dialog, 640)
+        return dialog
+
     def configure_disc_extras(self):
         """Everything a disc can carry beyond the game: bonus, mods, Steam, files for the PC, Mac, Linux."""
         theme = self.current_theme()
@@ -4798,6 +6001,8 @@ class RialtoApp:
         # 1080-line screen, and the lowest controls could not be reached. Never taller than the work area less
         # its title bar (B13.4), and no scrolling. On a 720-line screen that leaves 640 lines and it asked for
         # 652, so 16 came out of the padding: 6 round Done, 4 round the lead line, 2 above each section's rule.
+        # Steam has a third column of its own (1.5.2): its five rows of art under the tick box held 150 lines
+        # more than either column had to give.
         dialog, body = self.themed_dialog(
             "Disc Extras",
             "Everything the disc can carry besides the game itself",
@@ -4860,23 +6065,30 @@ class RialtoApp:
         tk.Frame(columns, bg=theme["button_bg"], width=1).pack(side="left", fill="y", pady=10)
         right = tk.Frame(columns, bg=theme["bg"])
         right.pack(side="left", fill="both", expand=True, anchor="n")
-        col = left  # Bonus, Mods and Steam on the left; Compatibility, Mac and Linux on the right (balanced for 1366 x 768)
+        tk.Frame(columns, bg=theme["button_bg"], width=1).pack(side="left", fill="y", pady=10)
+        steam_col = tk.Frame(columns, bg=theme["bg"])
+        steam_col.pack(side="left", fill="both", expand=True, anchor="n")
+        # Bonus and Mods on the left; Compatibility, Mac and Linux in the middle; Steam on the right. Each column's
+        # words wrap to its own width (balanced for 1366 x 768, and within 1280 across for 1080p at 150 percent).
+        col, wrap = left, 380
 
         def section(title):
             tk.Frame(col, bg=theme["button_bg"], height=1).pack(fill="x", padx=14, pady=(8, 0))
             tk.Label(col, text=title, bg=theme["bg"], fg=theme["fg"], anchor="w",
                      font=("Segoe UI", 10, "bold")).pack(fill="x", padx=14, pady=(8, 2))
 
-        def path_row(parent, label, var, tip, browse_command):
+        def path_row(parent, label, var, tip, browse_command, browse_tip="Pick the folder from your files."):
             row = tk.Frame(parent, bg=theme["bg"])
             row.pack(fill="x", padx=14, pady=3)
             tk.Label(row, text=label, bg=theme["bg"], fg=theme["fg"],
                      width=16, anchor="w").pack(side="left")
             entry = ttk.Entry(row, textvariable=var)
             entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
-            ttk.Button(row, text="Browse", command=browse_command,
-                       style="Rounded.TButton").pack(side="left")
+            browse = ttk.Button(row, text="Browse", command=browse_command,
+                                style="Rounded.TButton")
+            browse.pack(side="left")
             ToolTip(entry, tip)
+            ToolTip(browse, browse_tip)
             return row
 
         def pick_dir(var, title, on_done=None):
@@ -4893,7 +6105,7 @@ class RialtoApp:
         # --- Bonus content ---
         section("Bonus content")
         tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=520,
+                 font=("Segoe UI", 9), wraplength=wrap,
                  text=("Soundtracks, art, wallpapers, the design doc, anything at all. It gets a "
                        "BONUS button on the disc menu that opens the folder.")
                  ).pack(fill="x", padx=14, pady=(0, 4))
@@ -4905,7 +6117,7 @@ class RialtoApp:
                              pick_dir(self.bonus_folder_var, "Pick your bonus content folder"))
 
         bonus_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                              anchor="w", font=("Segoe UI", 9), wraplength=520)
+                              anchor="w", font=("Segoe UI", 9), wraplength=wrap)
         bonus_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_bonus_note():
@@ -4953,7 +6165,7 @@ class RialtoApp:
         ToolTip(mods_check, "Puts your mods folder on the disc and adds a MODS button to the menu "
                             "that runs the tool inside it. Works from the disc and after installing.")
         tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=520,
+                 font=("Segoe UI", 9), wraplength=wrap,
                  text=("Point at the folder holding your mod manager or loader. Rialto finds the "
                        ".exe inside it on its own. Leave it empty and a folder called mods inside "
                        "your game folder is used.")
@@ -4966,7 +6178,7 @@ class RialtoApp:
                             pick_dir(self.mod_folder_var, "Pick the folder holding your mod tool"))
 
         mods_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                             anchor="w", font=("Segoe UI", 9), wraplength=520)
+                             anchor="w", font=("Segoe UI", 9), wraplength=wrap)
         mods_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_mods_note(*_args):
@@ -5032,7 +6244,7 @@ class RialtoApp:
         ToolTip(mods_btn, "Makes a mods folder inside your game folder and opens it in Explorer.")
 
         # --- Compatibility mode ---
-        col = right
+        col, wrap = right, 430
         section("Compatibility mode")
         compat_check = self.themed_check(
             col, "Add a compatibility button to the disc menu", self.compat_mode_var,
@@ -5041,7 +6253,7 @@ class RialtoApp:
                               "launch argument already set, so a player on older hardware does not "
                               "have to type one.")
         tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=520,
+                 font=("Segoe UI", 9), wraplength=wrap,
                  text=("For a game that can fall back to older graphics (OpenGL instead of Vulkan, "
                        "windowed instead of fullscreen), if it already reads a launch argument.")
                  ).pack(fill="x", padx=14, pady=(0, 2))
@@ -5067,7 +6279,7 @@ class RialtoApp:
                             "and the menu explains it in general terms, in the player's language.")
 
         compat_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                               anchor="w", font=("Segoe UI", 9), wraplength=520)
+                               anchor="w", font=("Segoe UI", 9), wraplength=wrap)
         compat_note.pack(fill="x", padx=14, pady=(2, 0))
 
         def refresh_compat_note(*_args):
@@ -5105,30 +6317,14 @@ class RialtoApp:
 
         dialog.bind("<Destroy>", drop_compat_trace, add="+")
 
-        # --- Steam ---
-        col = left
-        section("Steam")
-        steam_check = self.themed_check(
-            col, "Show an Add to Steam button after install", self.steam_button_var,
-            anchor="w", padx=14, pady=2)
-        ToolTip(steam_check, "After an install from your disc, the menu offers one click to add the "
-                             "game to the player's Steam library as a non-Steam game. Steam needs to be "
-                             "closed first, and the menu shows how.")
-        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=520,
-                 text=("Nothing is uploaded or sold through Steam. The button only adds a shortcut to "
-                       "the player's own Steam library.")
-                 ).pack(fill="x", padx=14, pady=(0, 2))
-
         # --- Mac and Linux ---
         # The explainer sits above the boxes here, not below them, because the
         # thing worth knowing is what Rialto does to a build folder - and an
         # author who reads that first stops hunting for a .dmg they do not need
         # to make.
-        col = right
         section("Mac and Linux on the same disc (only if you built them)")
         tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
-                 font=("Segoe UI", 9), wraplength=520,
+                 font=("Segoe UI", 9), wraplength=wrap,
                  text=("Point at a plain build folder, the one you would have zipped up yourself, "
                        "and Rialto packs it so the game comes off the disc ready to run. No "
                        "Terminal, nothing to type. The disc's README spells out the real steps for "
@@ -5152,7 +6348,7 @@ class RialtoApp:
             path_row(col, "%s build:" % unix_label, unix_var, unix_tip,
                      pick_dir(unix_var, "Pick your %s build folder" % unix_label))
             unix_note = tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
-                                 anchor="w", font=("Segoe UI", 9), wraplength=520)
+                                 anchor="w", font=("Segoe UI", 9), wraplength=wrap)
             unix_note.pack(fill="x", padx=14, pady=(0, 2))
             unix_notes[unix_label] = (unix_var, unix_note)
 
@@ -5193,7 +6389,122 @@ class RialtoApp:
 
         dialog.bind("<Destroy>", drop_unix_traces, add="+")
 
-        self.fit_dialog_to_screen(dialog, self.DISC_EXTRAS_WIDTH)
+        # --- Steam ---
+        col, wrap = steam_col, 330
+        section("Steam")
+        steam_check = self.themed_check(
+            col, "Show an Add to Steam button after install", self.steam_button_var,
+            anchor="w", padx=14, pady=2)
+        ToolTip(steam_check, "After an install from your disc, the menu offers one click to add the "
+                             "game to the player's Steam library as a non-Steam game. Steam needs to be "
+                             "closed first, and the menu shows how. Ticked, the rows below take your "
+                             "own art for each picture Steam shows.")
+        tk.Label(col, bg=theme["bg"], fg=theme["disabled_fg"], justify="left", anchor="w",
+                 font=("Segoe UI", 9), wraplength=wrap,
+                 text=("Nothing is uploaded or sold through Steam. The button only adds a shortcut to "
+                       "the player's own Steam library.")
+                 ).pack(fill="x", padx=14, pady=(0, 2))
+
+        # The developer's own art for that shortcut (1.5.2), one row for each picture, under Steam's own
+        # names. Shown only while the box is ticked: without the button no art goes on the disc.
+        steam_rows = tk.Frame(col, bg=theme["bg"])
+        steam_rows.pack(fill="x")
+        steam_tips = {
+            "Capsule": ("The portrait card art in the player's Steam library, and the smaller tiles on "
+                        "the Home page's Recent Games. Steam's size is 600 x 900; the half-size 300 x 450 "
+                        "and any other size Steam takes are taken as they are. A PNG, a JPG or a WebP, "
+                        "and an animated PNG or WebP keeps up to 1,000 of its frames; past that, Steam gets "
+                        "its first frame. Only the game's title on it, no other words. Leave it empty and "
+                        "Rialto makes one from your menu background and Game Logo."),
+            "Header": ("The wide picture Steam shows for the game you played last on the Home page's "
+                       "Recent Games, and in other places in the library. Steam's size is 920 x 430, "
+                       "the size of a store page's Header Capsule; the older 460 x 215 and any other size "
+                       "Steam takes are taken as they are. A PNG, a JPG or a WebP, and an animated PNG or "
+                       "WebP keeps up to 1,000 of its frames; past that, Steam gets its first frame. Leave "
+                       "it empty and Rialto makes one from your menu background and Game Logo."),
+            "Hero": ("The wide background across the top of the game's page in the Steam library. "
+                     "Steam's size is 3840 x 1240; the half-size 1920 x 620 and any other size Steam takes "
+                     "are taken as they are. A PNG, a JPG or a WebP, and an animated PNG or WebP keeps up "
+                     "to 1,000 of its frames at 1920 x 620, and 250 at 3840 x 1240; past that, Steam gets "
+                     "its first frame. No words on it: as the window changes size, Steam crops its edges, the top "
+                     "and bottom as well as the sides, so keep faces and anything that matters in the middle "
+                     "860 x 380. Leave it empty and "
+                     "Rialto makes one from your menu background."),
+            "Logo": ("The game's logo, which Steam draws over the Library Hero at the top of the "
+                     "game's page. Steam's size is 1280 wide or 720 tall, whichever it reaches first, as "
+                     "a PNG with a transparent background; the older 1280 x 720 and 640 x 360 and any "
+                     "other size are taken as they are. A WebP works too, and an animated PNG or WebP "
+                     "keeps up to 1,000 of its frames; past that, Steam gets its first frame. The logo "
+                     "only, no other words. Leave it empty and Rialto uses your Game Logo."),
+            "Icon": ("The small icon beside the game in the Steam library's list, and on a desktop "
+                     "shortcut Steam makes for it. Steam's size is 256 x 256 or 512 x 512, an .ico or a "
+                     ".png; the older 32 x 32 and other sizes are taken as they are, and an .ico goes "
+                     "with every size in it. Leave it empty and the shortcut uses your Game Icon."),
+        }
+
+        def pick_steam_piece(key, var, name):
+            def handler():
+                kinds = {"Logo": [("PNG or WebP", "*.png;*.webp")],
+                         "Icon": [("Icon or PNG", "*.ico;*.png")]}.get(
+                    key, [("PNG, JPG or WebP", "*.png;*.jpg;*.jpeg;*.webp")])
+                path = filedialog.askopenfilename(
+                    parent=dialog, title="Pick the %s" % name, initialdir=self.art_start_dir(),
+                    filetypes=kinds + [("All Files", "*.*")])
+                if not path:
+                    return
+                _picture, _filename, problem, note = self.read_steam_piece(key, path)
+                if problem:
+                    self.show_centered_popup("Steam cannot use this %s" % name, problem)
+                    return
+                var.set(path)
+                self.update_status("✅ Selected %s: %s%s" % (name, os.path.basename(path),
+                                                             " (%s)" % note if note else ""))
+                refresh_steam_note()
+                self.refresh_disc_meter()
+            return handler
+
+        steam_kinds = {"Logo": "a PNG or a WebP", "Icon": "an .ico or a .png"}
+        for key, attr, name, *_rest in self.STEAM_ART_PIECES:
+            var = getattr(self, attr)
+            path_row(steam_rows, "%s:" % name, var, steam_tips[key], pick_steam_piece(key, var, name),
+                     "Pick the %s, %s, from your files." % (name, steam_kinds.get(key, "a PNG, a JPG or a WebP")))
+
+        steam_note = tk.Label(steam_rows, bg=theme["bg"], fg=theme["disabled_fg"], justify="left",
+                              anchor="w", font=("Segoe UI", 9), wraplength=wrap)
+        steam_note.pack(fill="x", padx=14, pady=(2, 0))
+
+        def refresh_steam_note():
+            """Say which pieces are the developer's and which Rialto makes, and any that Steam cannot use."""
+            given = [(key, name, getattr(self, attr).get().strip())
+                     for key, attr, name, *_rest in self.STEAM_ART_PIECES]
+            for key, name, path in given:
+                if path:
+                    problem = self.read_steam_piece(key, path)[2]
+                    if problem:
+                        steam_note.configure(text="%s: %s" % (name, problem))
+                        return
+            if all(path for _key, _name, path in given):
+                steam_note.configure(text="All five pieces are yours.")
+            elif any(path for _key, _name, path in given):
+                steam_note.configure(text="Rialto makes the empty ones from your Step 4 art.")
+            else:
+                steam_note.configure(text="Empty rows: Rialto makes each piece from your Step 4 art.")
+
+        def show_steam_rows():
+            if self.steam_button_var.get():
+                steam_rows.pack(fill="x")
+            else:
+                steam_rows.pack_forget()
+
+        steam_check.configure(command=lambda: (show_steam_rows(), self.refresh_disc_meter()))
+        refresh_steam_note()
+
+        # Sized with the Steam rows showing, so ticking the box later never asks for more room than the
+        # window has; then the rows go if the box is not ticked.
+        dialog.update_idletasks()
+        holds = dialog.winfo_reqheight()
+        show_steam_rows()
+        self.fit_dialog_to_screen(dialog, self.DISC_EXTRAS_WIDTH, holds)
 
     # Files that have to come out of the archive runnable. Anything starting
     # with the ELF magic is a Linux executable whatever it is called, which is
@@ -5291,6 +6602,75 @@ class RialtoApp:
                     pass
         return total
 
+    # START HERE.txt and, beside a Linux build its author packed, start.sh: each under 2 KB.
+    UNIX_NOTES_ALLOWANCE = 2 * 2048
+
+    def unix_archive_stem(self):
+        """The name package_unix_build gives the archive and its folder, before "-Mac" or "-Linux".
+
+        The game's own name: a store's format at the end, like (PC CD), stays on the store page.
+        """
+        title = player_title(self.entries["Title"].get().strip() if "Title" in self.entries else "")
+        stem = sanitize_text(title).strip() or "Game"
+        return "".join(c for c in stem if c.isalnum() or c in " -_").strip() or "Game"
+
+    def unix_build_bytes(self, folder, archive_root):
+        """(what a Mac or Linux build weighs in the disc's Mac or Linux folder, what that takes on a disc), in bytes.
+
+        For the meter, so the files are only looked at, never read. A folder of
+        archives the author packed is copied as it is. Any other folder goes in
+        as the .tar.gz package_unix_build writes, whose folder is
+        `archive_root`, and that is counted as the tar inside it, header for
+        header as tarfile writes them, with what gzip can add to it at most:
+        never under the archive, though gzip often halves a build.
+        """
+        import tarfile
+
+        def on_disc(size):
+            return (-(-size // 2048) + 1) * 2048  # whole sectors, and one for its record
+
+        notes = self.UNIX_NOTES_ALLOWANCE
+        if self.folder_is_already_packaged(folder):
+            weight, sectors = notes, 2 * on_disc(notes // 2)
+            for root_dir, _dirs, files in os.walk(folder):
+                sectors += 2048
+                for name in files:
+                    try:
+                        size = os.path.getsize(os.path.join(root_dir, name))
+                    except OSError:
+                        continue
+                    weight += size
+                    sectors += on_disc(size)
+            return weight, sectors
+
+        def header(name, kind, size, mtime):
+            info = tarfile.TarInfo(name)
+            info.type, info.size, info.mtime = kind, size, mtime
+            return len(info.tobuf(tarfile.DEFAULT_FORMAT, tarfile.ENCODING, "surrogateescape"))
+
+        tar = 0
+        for root_dir, _dirs, files in os.walk(folder):
+            rel = os.path.relpath(root_dir, folder).replace(os.sep, "/")
+            inside = archive_root if rel == "." else "%s/%s" % (archive_root, rel)
+            try:
+                tar += header(inside + "/", tarfile.DIRTYPE, 0, os.stat(root_dir).st_mtime)
+            except OSError:
+                pass
+            for name in files:
+                file_path = os.path.join(root_dir, name)
+                try:
+                    size = os.path.getsize(file_path)
+                    tar += header("%s/%s" % (inside, name), tarfile.REGTYPE, size, os.stat(file_path).st_mtime)
+                except OSError:
+                    continue
+                tar += -(-size // 512) * 512
+        # The start.sh written into a Linux archive, the end of the archive, and its last record filled out.
+        tar += 2 * 512 + 2 * 512
+        tar = -(-tar // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
+        # zlib's deflateBound for the settings gzip uses, with gzip's header (it names the .tar) and trailer.
+        packed = tar + (tar >> 12) + (tar >> 14) + (tar >> 25) + 7 + 18 + len(archive_root.encode("utf-8")) + 5
+        return packed + notes, 2048 + on_disc(packed) + on_disc(notes)
+
     def folder_is_already_packaged(self, folder):
         """True when the author already supplied archives rather than a raw tree."""
         try:
@@ -5319,9 +6699,7 @@ class RialtoApp:
         import io
         import tarfile
 
-        title = (self.entries["Title"].get().strip() if "Title" in self.entries else "")
-        stem = sanitize_text(title).strip() or "Game"
-        stem = "".join(c for c in stem if c.isalnum() or c in " -_").strip() or "Game"
+        stem = self.unix_archive_stem()
         archive_name = f"{stem}-{label}.tar.gz"
         archive_path = os.path.join(dest_folder, archive_name)
         root_name = f"{stem}-{label}"
@@ -5384,7 +6762,7 @@ class RialtoApp:
         who ships both should not find one platform walked through the door and
         the other left on the step.
         """
-        game = (self.entries["Title"].get().strip() if "Title" in self.entries else "") or "the game"
+        game = player_title(self.entries["Title"].get().strip() if "Title" in self.entries else "") or "the game"
         try:
             if label == "Linux":
                 if archive:
@@ -5725,7 +7103,7 @@ class RialtoApp:
             hint_path = os.path.join(dest, "START HERE - double click setup.txt")
             with open(hint_path, "w", encoding="utf-8") as f:
                 f.write(
-                    f"Thanks for grabbing {meta.get('Title', 'this game')}!\n\n"
+                    f"Thanks for grabbing {player_title(meta.get('Title', 'this game'))}!\n\n"
                     "USB sticks don't start by themselves like discs do.\n"
                     "Just double-click setup.exe and you're on your way.\n"
                 )
@@ -5795,7 +7173,7 @@ class RialtoApp:
                     fh.write(mkisofs_path_list(items, folders))
                 tool = mkisofs_command(tool_path, disc_label, needs_udf, utf8)
             payload = self._fileset_size(output_path, items)
-            result = self.run_tool_watched(tool, output_path, 1800, step,
+            result = self.run_tool_watched(tool, output_path, self.tool_time_limit(1800), step,
                                            watch=lambda: self.image_growth(written, payload))
             if result.returncode != 0 or not os.path.exists(written):
                 error_tail = (result.stderr or result.stdout or "").strip().splitlines()
@@ -5861,7 +7239,8 @@ class RialtoApp:
                 self.update_status("❌ Disc image stopped after 30 minutes without finishing")
                 self._remove_partial_iso(iso_path)
                 raise RuntimeError(f"{os.path.basename(iso_path)} was not finished after 30 minutes. Check free "
-                                   "disk space and that no scanner is holding the build folder, then build again")
+                                   "disk space and that no scanner is holding the build folder. "
+                                   + no_time_limit_hint("30 minutes", "to write its disc image"))
             except Exception as e:
                 self._remove_partial_iso(iso_path)
                 if getattr(self, "_abandon_build", False):
@@ -5905,7 +7284,7 @@ class RialtoApp:
         note_path = os.path.join(output_path, "MULTI-DISC README.txt")
         with open(note_path, "w", encoding="utf-8") as f:
             f.write(
-                f"{meta.get('Title', game_name)} comes on more than one disc!\n\n"
+                f"{player_title(meta.get('Title', game_name))} comes on more than one disc!\n\n"
                 "1. Start with Disc 1. Setup begins like normal.\n"
                 "2. When Setup asks for the next file, swap in the next disc\n"
                 "   and point it at your disc drive.\n"
@@ -5942,7 +7321,7 @@ class RialtoApp:
         self.images_made = []
         for number, items in enumerate(discs, start=1):
             iso_path = os.path.join(output_path, f"{game_name} Disc {number}.iso")
-            label = f"{disc_label[:13]} D{number}"
+            label = f"{volume_label(disc_label, 13)} D{number}"
             self.update_status(f"🔄 Creating Disc {number} of {len(discs)}...")
             if self._build_single_iso(output_path, iso_path, items, label, needs_udf):
                 self.images_made.append(iso_path)
@@ -6042,10 +7421,12 @@ class RialtoApp:
         self.root.update()
         try:
             os.makedirs(dest, exist_ok=True)
-            result = subprocess.run(
+            # Watched and held (1.5.2): with No time limit an unpack can run for hours,
+            # so the window answers, and closing Rialto stops it, all the while.
+            result = self.run_tool_held(
                 [innoextract, "--extract", "--exclude-temp", "--output-dir", dest, installer],
-                capture_output=True, text=True, timeout=3600,
-                creationflags=subprocess.CREATE_NO_WINDOW)
+                None, self.tool_time_limit(3600), "Unpacking " + os.path.basename(installer),
+                "unpacking your GOG installer")
             if result.returncode != 0:
                 tail = (result.stderr or result.stdout or "").strip().splitlines()
                 self.update_status(f"❌ Unpack failed: {tail[-1] if tail else 'unknown error'}")
@@ -6068,7 +7449,8 @@ class RialtoApp:
             self.update_status(f"✅ {pretty} unpacked into input/{folder_name}")
             self.update_status("   Add your art and icons above, then Preview and Build!")
         except subprocess.TimeoutExpired:
-            self.update_status("❌ Unpacking took over an hour and was stopped")
+            self.update_status("❌ Unpacking took over an hour and was stopped. "
+                               + no_time_limit_hint("an hour", "to unpack its GOG installer", "import"))
         except Exception as e:
             self.update_status(f"❌ GOG import failed: {e}")
 
@@ -6082,7 +7464,7 @@ class RialtoApp:
         if not self.current_game_path:
             self.show_centered_popup("Pick a game first", "Browse to your game folder, then export the .msix.")
             return
-        title = self.entries["Title"].get().strip() or os.path.basename(self.current_game_path)
+        title = player_title(self.entries["Title"].get().strip()) or os.path.basename(self.current_game_path)
         games = self.validated_game_executables()
         if games:
             exe_rel = games[0]["exe"]
@@ -6133,7 +7515,10 @@ class RialtoApp:
             ok, message = msix_export.build_msix(
                 self.current_game_path, title, publisher_var.get().strip(),
                 display_var.get().strip(), version_var.get().strip() or "1.0.0.0",
-                exe_rel, art, out_path, self.update_status)
+                exe_rel, art, out_path, self.update_status, timeout=self.tool_time_limit(1800),
+                run=lambda command, limit: self.run_tool_held(command, None, limit, "Packing the .msix",
+                                                              "packing your .msix"),
+                identity_title=self.entries["Title"].get().strip() or os.path.basename(self.current_game_path))
             self.update_status(("✅ " if ok else "❌ ") + message)
             if not ok:
                 return
@@ -6146,7 +7531,12 @@ class RialtoApp:
             except Exception:
                 pass
             if trusted_signing.is_configured():
-                ok_sign, sign_message = trusted_signing.sign_file(out_path, self.update_status)
+                # Signing hashes the whole package, so a large one is signed held and under No time limit too.
+                ok_sign, sign_message = trusted_signing.sign_file(
+                    out_path, self.update_status, timeout=self.tool_time_limit(300),
+                    run=lambda command, limit: self.run_tool_held(command, None, limit, "Signing the .msix",
+                                                                  "signing your .msix"),
+                    again="export")
                 self.update_status(("✅ " if ok_sign else "⚠️ ") + sign_message)
                 if not ok_sign:
                     self.update_status("   The .msix was still created. Sign it before sharing: unsigned .msix files won't install.")
@@ -7040,10 +8430,14 @@ class RialtoApp:
 
         # Save additional settings
         session_data["Background"] = self.bg_path_var.get()
+        session_data["BackgroundHasTitle"] = bool(self.bg_has_title_var.get())
+        session_data["MenuMusic"] = self.menu_music_var.get()
+        session_data["MenuTheme"] = dict(self.menu_theme) if isinstance(self.menu_theme, dict) else {}
         session_data["Logo"] = self.logo_path_var.get()
         session_data["Icon"] = self.ico_path_var.get()
         session_data["DiscIcon"] = self.disc_icon_var.get()
         session_data["DiscName"] = self.disc_name_var.get()
+        session_data["SteamArt"] = self.steam_art_paths()
 
         try:
             with open(LAST_SESSION_FILE, "w", encoding="utf-8") as f:
@@ -7073,6 +8467,12 @@ class RialtoApp:
                         self.entries[key].insert(0, value)
                     elif key == "Background":
                         self.bg_path_var.set(value)
+                    elif key == "BackgroundHasTitle":
+                        self.bg_has_title_var.set(bool(value))
+                    elif key == "MenuMusic":
+                        self.menu_music_var.set(value if isinstance(value, str) else "")
+                    elif key == "MenuTheme":
+                        self.menu_theme = dict(value) if isinstance(value, dict) else {}
                     elif key == "Logo":
                         self.logo_path_var.set(value)
                     elif key == "Icon":
@@ -7081,6 +8481,8 @@ class RialtoApp:
                         self.disc_icon_var.set(value)
                     elif key == "DiscName":
                         self.disc_name_var.set(value)
+                    elif key == "SteamArt":
+                        self.set_steam_art(value)
                         
         except Exception:
             pass
@@ -7600,6 +9002,47 @@ class RialtoApp:
                 self.update_status(f"✅ Selected image background: {os.path.basename(file)}")
             self.refresh_disc_meter()
 
+    def browse_menu_music(self):
+        """Browse for the Menu Music WAV (1.5.2), checked as the build will check it: menu_music_check."""
+        file = filedialog.askopenfilename(
+            title="Select Menu Music",
+            initialdir=self.art_start_dir(),
+            filetypes=[("WAV audio", "*.wav")]
+        )
+        if not file:
+            return
+        seconds, size, problem = menu_music_check(file)
+        if problem:
+            self.show_centered_popup(
+                "Menu Music",
+                f"Rialto cannot use {os.path.basename(file)} as the menu's music: {problem}.\n\n"
+                "Most audio programs save a PCM WAV under Export or Save As, often as 16-bit WAV.")
+            return
+        self.menu_music_var.set(file)
+        self.update_status(f"✅ Selected menu music: {os.path.basename(file)} "
+                           f"({format_length(seconds)}, {format_megabytes(size)})")
+        self.warn_menu_music_large(size)
+        self.refresh_disc_meter()
+
+    def warn_menu_music_large(self, size):
+        """Say what a large Menu Music WAV adds to the disc (1.5.2).
+
+        The menu folder is on the disc and inside the installer too, for the
+        menu the player installs, so the music is carried twice.
+        """
+        if size > MENU_MUSIC_LARGE_BYTES:
+            self.update_status(f"⚠️ The menu music is {format_megabytes(size)}. The disc carries it twice, for "
+                               "the menu on the disc and inside the installer for the installed menu, so it adds "
+                               f"up to {format_megabytes(2 * size)} to the disc. A shorter loop, or mono or a "
+                               "lower sample rate, makes it smaller.")
+
+    def menu_music_source(self):
+        """The Menu Music file the build stages as menu/menu_music.wav, or "" when there is none to use."""
+        path = self.menu_music_var.get().strip() if hasattr(self, "menu_music_var") else ""
+        if not path or not os.path.isfile(path):
+            return ""
+        return path if not menu_music_check(path)[2] else ""
+
     def browse_logo(self):
         """Browse for game logo PNG file"""
         initial_dir = self.art_start_dir()
@@ -7614,6 +9057,8 @@ class RialtoApp:
         if file:
             self.logo_path_var.set(file)
             self.update_status(f"✅ Selected game logo: {os.path.basename(file)}")
+            # With Add to Steam ticked, the Steam art Rialto makes is weighed from the Game Logo.
+            self.refresh_disc_meter()
 
     def browse_company_logo(self):
         """Browse for company logo PNG file"""
@@ -7662,6 +9107,7 @@ class RialtoApp:
             self.config = {}
         
         self.config["sign_final_build"] = self.sign_final_build.get()
+        self.config["no_time_limit"] = bool(self.no_time_limit.get())
         self.config["remove_wti_branding"] = self.remove_wti_branding.get()
         self.config["mod_launcher"] = self.mod_launcher_var.get()
 
@@ -7746,6 +9192,9 @@ class RialtoApp:
             meta["PublisherText"] = self.publisher_text_var.get()
             meta["Icon"] = self.ico_path_var.get()
             meta["InstallPath"] = f"C:\\Games\\{game_name}"
+            note = store_format_note(meta.get("Title"))
+            if note:
+                self.update_status("ℹ️ " + note)
 
             # 3.5. Stage the mods folder (optional) - must happen before the menu
             # config is written and before ISCC snapshots the folder for {app}
@@ -8120,7 +9569,11 @@ class RialtoApp:
         config = {
             # Window title and the on-screen title. Used to be baked into a
             # per-game menu.exe; now it rides in the config like everything else.
-            "title": meta.get("Title", "").strip() or "Game",
+            "title": player_title(meta.get("Title", "").strip()) or "Game",
+            # Where a disc of this game from before 4 Nov kept the player's own
+            # choices, so an upgrade keeps their stars and menu language.
+            "earlier_titles": earlier_menu_titles(meta.get("Title", ""),
+                                                  player_title(meta.get("Title", "").strip()) or "Game"),
             "company_logo": "company_logo.png" if company_logo_path and os.path.exists(company_logo_path) else "",
             # White label takes We the Indies out of the copyright line too,
             # not only off the artwork.
@@ -8155,7 +9608,98 @@ class RialtoApp:
         # script, not the menu. Absent unless asked for on a disc of several.
         if getattr(self, "game_shortcuts", False) and len(config["games"]) > 1:
             config["start_menu_per_game"] = True
+        # A background with the title in the art (1.5.2): no shading, no title.
+        # Absent unless ticked, so every other disc's config stays as it was.
+        own_title = getattr(self, "bg_has_title_var", None)
+        if own_title is not None and own_title.get():
+            config["background_has_title"] = True
+        # The menu's own font and colours (1.5.2), absent unless a profile set them.
+        theme = self.menu_theme_config()
+        if theme:
+            config["theme"] = theme
+        # The Menu Music (1.5.2) follows the file stage_menu_artwork put in the
+        # menu folder, never the box: absent unless there is music to play.
+        if os.path.isfile(os.path.join(root_path, "menu", "menu_music.wav")):
+            config["music"] = "menu_music.wav"
         return config
+
+    def menu_theme_path(self, key):
+        """A path from the menu theme (its Font or its License), or "".
+
+        A relative path is read against the game folder, so a profile kept beside
+        the game still finds it after the folder moves.
+        """
+        raw = getattr(self, "menu_theme", None)
+        path = raw.get(key) if isinstance(raw, dict) else None
+        if not isinstance(path, str) or not path.strip():
+            return ""
+        path = path.strip()
+        if not os.path.isabs(path) and getattr(self, "current_game_path", ""):
+            path = os.path.join(self.current_game_path, path)
+        return path
+
+    def menu_font_choice(self):
+        """The menu theme's font as the build takes it: (font, licence, family, problem). See menu_font_check.
+
+        All "" when no font is set.
+        """
+        font = self.menu_theme_path("Font")
+        if not font:
+            return "", "", "", ""
+        return menu_font_check(font, self.menu_theme_path("License"))
+
+    def menu_theme_font(self):
+        """The menu theme's font file, if it goes on the disc (a .ttf or .otf that is there, with its license), else ""."""
+        return self.menu_font_choice()[0]
+
+    def menu_theme_config(self):
+        """The disc menu's own font and colours, as menu_config.json carries them (1.5.2).
+
+        Set in Font and Colors (configure_menu_theme) and kept in a profile
+        as "MenuTheme": {"Font": a .ttf or .otf, "License": its license file,
+        "Text", "Accent", "Quiet": "#rrggbb", "Scale": 0.8 to 1.5, "Top": 0 to
+        500, the highest the buttons reach on a background with its own title,
+        in pixels of the 1280x720 menu}. Anything else is left out, and the menu
+        checks it all again. The font rides as menu_font.ttf (or .otf) with its
+        license beside it: stage_menu_artwork.
+        """
+        raw = getattr(self, "menu_theme", None)
+        if not isinstance(raw, dict) or not raw:
+            return {}
+        out, dropped = {}, []
+        for key in ("Text", "Accent", "Quiet"):
+            value = raw.get(key)
+            if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value.strip()):
+                out[key.lower()] = value.strip()
+            elif value not in (None, ""):
+                dropped.append(f"{key} {value!r} (a color is # and six hex digits)")
+        scale = raw.get("Scale")
+        if isinstance(scale, (int, float)) and not isinstance(scale, bool) and 0.8 <= scale <= 1.5:
+            out["scale"] = float(scale)
+        elif scale is not None:
+            dropped.append(f"Scale {scale!r} (0.8 to 1.5)")
+        top = raw.get("Top")
+        if isinstance(top, int) and not isinstance(top, bool) and 0 <= top <= 500:
+            out["top"] = top
+        elif top is not None:
+            dropped.append(f"Top {top!r} (a whole number, 0 to 500)")
+        known = ("Font", "License", "Text", "Accent", "Quiet", "Scale", "Top")
+        for key in raw:
+            if key not in known:
+                dropped.append(f"{key!r} (not a theme setting: {', '.join(known)})")
+        font, _licence, _family, problem = self.menu_font_choice()
+        if font:
+            out["font"] = "menu_font" + os.path.splitext(font)[1].lower()
+        elif raw.get("Font"):
+            dropped.append(f"Font {raw.get('Font')!r} ({problem or 'a .ttf or .otf file that is there'})")
+        # Said once for each theme, like a missing background: the menu falls back to its own look.
+        status = getattr(self, "update_status", None)
+        said = repr(sorted((str(k), repr(v)) for k, v in raw.items()))
+        if dropped and status is not None and getattr(self, "_theme_drop_said", None) != said:
+            self._theme_drop_said = said
+            status("⚠️ The menu's font and colors have values Rialto left out, so the menu uses its "
+                   "own look for them: " + "; ".join(dropped))
+        return out
 
     def write_menu_config(self, menu_dir, root_path):
         """Write menu_config.json into the staged menu folder."""
@@ -8167,6 +9711,29 @@ class RialtoApp:
         except OSError as e:
             self.update_status(f"⚠️ Failed to create menu config: {e}")
             return False
+
+    def warn_menu_column_squeezed(self, root_path):
+        """Say so when the disc menu's buttons would climb above the theme's top line, onto the art's title (1.5.2).
+
+        Read from the menu_config.json just written and the bonus folder staged
+        before it, and laid out as the menu lays out its column
+        (menu_column_overflow). Returns how far they climb, in pixels.
+        """
+        try:
+            with open(os.path.join(root_path, "menu", "menu_config.json"), encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, ValueError):
+            return 0
+        font = self.menu_theme_font()
+        over = menu_column_overflow(config, os.path.isdir(os.path.join(root_path, "bonus")),
+                                    font_facts(font) if font else None)
+        if over:
+            self.update_status(
+                f"⚠️ On the disc menu the buttons rise about {over} pixels above the Top line "
+                f"({config['theme']['top']}) set in Font and Colors, so they can cover the title in your "
+                "background: there is not room for them all below it. A smaller Size or Top line, or fewer "
+                "buttons in Disc Extras, makes room.")
+        return over
 
     def compile_menu_launcher(self, output_path):
         """Stage the disc menu: artwork, config, the executable, and fallbacks."""
@@ -8196,6 +9763,7 @@ class RialtoApp:
         # 3. Create menu configuration file
         if self.write_menu_config(menu_dir, output_path):
             self.update_status("✅ Created menu configuration")
+            self.warn_menu_column_squeezed(output_path)
 
         # 4. Copy the background (GIF or still image) to the menu folder
         bg_source = self.bg_path_var.get()
@@ -8281,6 +9849,7 @@ class RialtoApp:
         # Rialto carries (1.5.1). The log says which.
         iscc, carried = installer_compiler()
         problem = None
+        timed_out = False
         unsigned_in_queue = False
 
         if iscc:
@@ -8293,7 +9862,8 @@ class RialtoApp:
                 else:
                     self.update_status("ℹ️ Building the installer with " + tool_words("iscc", iscc, False))
                 # An hour: a Blu-ray-sized game can take well over five minutes to
-                # compress, and a timeout now stops the build.
+                # compress, and a timeout now stops the build. A 30 GB game took
+                # longer than the hour (issue #4): No time limit lifts it (1.5.2).
                 # Watched (1.5.1, B6): ISCC names each file as it starts on it
                 # (seen streaming through the pipe, one line per file), so a
                 # file's bytes count once ISCC has moved on to the next.
@@ -8313,8 +9883,8 @@ class RialtoApp:
                     return (min(reached["bytes"] / total, 0.99) if total else None,
                             "{:,} of {:,} files".format(min(reached["files"], files), files))
 
-                result = self.run_tool_watched(command, output_path, 3600, "Compressing the installer",
-                                               on_line=on_line)
+                result = self.run_tool_watched(command, output_path, self.tool_time_limit(3600),
+                                               "Compressing the installer", on_line=on_line)
                 
                 if result.returncode == 0:
                     setup_path = os.path.join(output_path, "setup.exe")
@@ -8327,8 +9897,10 @@ class RialtoApp:
                             try:
                                 from rialto import trusted_signing
                                 if trusted_signing.is_configured():
+                                    limit = self.tool_time_limit(300)
                                     ok, message = self.run_watched_call(
-                                        "Signing setup.exe", lambda log: trusted_signing.sign_file(setup_path, log))
+                                        "Signing setup.exe",
+                                        lambda log: trusted_signing.sign_file(setup_path, log, timeout=limit))
                                     self.update_status(("✅ " if ok else "⚠️ ") + message)
                                     signed = ok
                                 else:
@@ -8385,6 +9957,7 @@ class RialtoApp:
                     
             except subprocess.TimeoutExpired:
                 problem = "ISCC ran for an hour without finishing"
+                timed_out = True
                 self.update_status("❌ ISCC ran for an hour without finishing")
             except Exception as e:
                 problem = "ISCC could not be run"
@@ -8395,7 +9968,8 @@ class RialtoApp:
                                + INNO_SETUP_DOWNLOAD)
 
         if problem:
-            raise RuntimeError(f"No installer was made ({problem}), so the build was stopped.")
+            raise RuntimeError(f"No installer was made ({problem}), so the build was stopped."
+                               + (" " + no_time_limit_hint("an hour", "to make its installer") if timed_out else ""))
         if unsigned_in_queue:
             raise RuntimeError("Sign Final Build is on and signing did not work, so this disc would have "
                                "gone out unsigned. Fix signing under Configure Signing, then build it again")
@@ -8618,12 +10192,27 @@ class RialtoApp:
         # displays, so it keeps punctuation like the colon in "Game: Subtitle";
         # path_name additionally loses the characters that would move a folder
         # or a registry key, and is used wherever the title becomes one.
-        app_name = iss_value(meta.get('Title'), 'Game')
-        path_name = iss_value(meta.get('Title'), 'Game', for_path=True)
+        # Both name the game, not a store's format (player_title, 4 Nov 2026).
+        app_name = iss_value(player_title(meta.get('Title')), 'Game')
+        path_name = iss_value(player_title(meta.get('Title')), 'Game', for_path=True)
+        # The install's identity: the game's name, as the folder and shortcuts
+        # are, so two titles a store sells one game under ("(PC CD)", then
+        # "(PC DVD)") are one install in one folder, never two sharing it. A
+        # disc built before 4 Nov had no AppId, so Inno took its AppName, the
+        # title as typed: on a PC that has one, or one under another format
+        # the store sells, Setup's own [Code] answers with that title instead
+        # (install_identity_code), and the new disc installs over it. A title
+        # without a format looks for the game's name in each store format too,
+        # because the disc before it may have carried one. Only a title the
+        # 120-character cap leaves the same as every one of those writes no
+        # AppId, because that is one install already.
+        typed_title = str(meta.get('Title') or "")
+        earlier = earlier_installs(typed_title, player_title(typed_title))
+        own_identity = not earlier
         app_version = "1.0"
         publisher = iss_value(meta.get('Developer'), 'Indie Developer')
         install_path = f"C:\\Games\\{path_name}"
-        start_menu = iss_value(meta.get('Start Menu Name'), path_name, for_path=True)
+        start_menu = iss_value(player_title(meta.get('Start Menu Name')), path_name, for_path=True)
         output_filename = "setup"
         
         # Copy icon if exists
@@ -8641,6 +10230,8 @@ class RialtoApp:
 
         # Build installer script
         iss_script = "[Setup]\n"
+        if not own_identity:
+            iss_script += "AppId={code:InstallIdentity}\n"
         iss_script += f"AppName={app_name}\n"
         iss_script += f"AppVersion={app_version}\n"
         iss_script += f"AppPublisher={publisher}\n"
@@ -8662,6 +10253,11 @@ class RialtoApp:
         iss_script += "DisableReadyPage=yes\n"
         iss_script += "UsePreviousAppDir=yes\n"
         iss_script += "ShowLanguageDialog=yes\n"  # Enable language selection dialog
+        if not own_identity:
+            # ISCC refuses an AppId with a constant in it otherwise. The player
+            # still picks the language in the first box; an upgrade only stops
+            # offering the earlier install's language first.
+            iss_script += "UsePreviousLanguage=no\n"
         
         if copied_icon_path:
             iss_script += f"SetupIconFile={copied_icon_path}\n"
@@ -8671,7 +10267,11 @@ class RialtoApp:
         iss_script += f"UninstallDisplayName={app_name}\n"
         iss_script += "CreateUninstallRegKey=yes\n"
         iss_script += "PrivilegesRequired=lowest\n"
-        iss_script += "PrivilegesRequiredOverridesAllowed=dialog commandline\n"
+        # Per user only, no "Select install mode" box (1.5.2). "Install for
+        # all users" makes Setup start itself again elevated from the disc,
+        # and from a PowerISO mount that stops with "ShellExecuteEx failed;
+        # code 1. Incorrect function." setup.exe /ALLUSERS still works.
+        iss_script += "PrivilegesRequiredOverridesAllowed=commandline\n"
         # 6.1sp1: Inno's own default and its recommendation, and the floor
         # Windows 7 needs to verify a signature at all (B8).
         iss_script += "MinVersion=6.1sp1\n"
@@ -8869,6 +10469,12 @@ class RialtoApp:
         if not win7_icons:
             self.update_status("⚠️ No game exe found for Windows 7 and 8: there the shortcuts open the menu, which needs Windows 8.1")
 
+        if earlier:
+            # A disc of this game built before 4 Nov named its shortcuts with
+            # the format; on the PC where its install is the one upgraded,
+            # they are taken away first.
+            iss_script += install_delete_lines(earlier)
+
         iss_script += "\n[Icons]\n"
         iss_script += f'Name: "{{group}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"{menu_only}\n'
         iss_script += f'Name: "{{userdesktop}}\\{path_name}"; Filename: "{{app}}\\menu\\menu.exe"; WorkingDir: "{{app}}"; IconFilename: "{{app}}\\game_icon.ico"; Tasks: desktopicon{menu_only}\n'
@@ -8883,15 +10489,19 @@ class RialtoApp:
         for line in win7_runs:
             iss_script += line + "\n"
         
-        # No [Code] section. Inno already provides IsWin64; a local function of
-        # the same name was an infinite-recursion shadow of the built-in.
+        # No IsWin64 in [Code]. Inno already provides it; a local function of
+        # the same name was an infinite-recursion shadow of the built-in. The
+        # one [Code] is the install's identity, written whenever an earlier
+        # disc of this game could be on the PC under another identity.
+        if not own_identity:
+            iss_script += install_identity_code(earlier, app_name.strip(), start_menu)
         
         # No [Registry] section, deliberately.
         #
         # There was one, writing UninstallString, QuietUninstallString,
         # InstallLocation and Publisher into a key named after the title. All
         # four are already written, and written better, by Inno itself:
-        # CreateUninstallRegKey=yes above produces <AppName>_is1 carrying those
+        # CreateUninstallRegKey=yes above produces <AppId>_is1 carrying those
         # plus DisplayName, DisplayIcon, DisplayVersion, EstimatedSize,
         # InstallDate and NoModify/NoRepair. The _is1 key is the entry players
         # actually see in Add or Remove Programs; the hand-written one had no
@@ -9097,7 +10707,8 @@ exit /b 0
         try:
             from rialto import trusted_signing
             signed, message = self.run_watched_call(
-                "Signing menu.exe", lambda log: trusted_signing.sign_staged_menu(menu_dir, log))
+                "Signing menu.exe", lambda log: trusted_signing.sign_staged_menu(
+                    menu_dir, log, timeout=self.tool_time_limit(300)))
         except Exception as e:
             if getattr(self, "_abandon_build", False):
                 raise
@@ -9207,7 +10818,7 @@ exit /b 0
         
         try:
             self.update_status("🔄 Compiling PyQt5 menu with PyInstaller...")
-            result = self.run_tool_watched(build_cmd, menu_dir, 300, "Compiling the disc menu")
+            result = self.run_tool_watched(build_cmd, menu_dir, self.tool_time_limit(300), "Compiling the disc menu")
             
             menu_exe = os.path.join(menu_dir, "menu.exe")
             
@@ -9266,7 +10877,7 @@ exit /b 0
     def create_batch_menu_fallback(self, output_path):
         """Create batch file menu that always works"""
         meta = {k: self.entries[k].get().strip() for k in self.entries}
-        game_title = escape_batch(meta.get('Title', 'Game')) or "Game"
+        game_title = escape_batch(player_title(meta.get('Title', 'Game'))) or "Game"
         game_title_upper = game_title.upper()
 
         batch_content = """@echo off
@@ -9538,10 +11149,22 @@ exit
     # them under the game folder it was saved beside, so moving that folder left every one stale.
     REBASEABLE_FILES = (
         ("bg_path_var", "Menu Background"),
+        ("menu_music_var", "Menu Music"),
         ("logo_path_var", "Game Logo"),
         ("company_logo_var", "Company Logo"),
         ("ico_path_var", "Game Icon"),
         ("disc_icon_var", "Disc Icon"),
+        ("steam_capsule_var", "Library Capsule"),
+        ("steam_header_var", "Library Header"),
+        ("steam_hero_var", "Library Hero"),
+        ("steam_logo_var", "Library Logo"),
+        ("steam_icon_var", "Shortcut Icon"),
+    )
+
+    # The files Font and Colors keeps in self.menu_theme, by their key there (1.5.2).
+    REBASEABLE_THEME_FILES = (
+        ("Font", "Menu Font"),
+        ("License", "Menu Font's license"),
     )
 
     def rebase_file_under_game(self, stored):
@@ -9587,6 +11210,13 @@ exit
             found = self.rebase_file_under_game(var.get().strip())
             if found:
                 var.set(found)
+                self.update_status(f"🔀 {label} re-pointed at your game folder: {found}")
+                fixed += 1
+        # The menu's font and its license (1.5.2), kept in the menu theme rather than on the form.
+        for key, label in self.REBASEABLE_THEME_FILES:
+            found = self.rebase_file_under_game(self.menu_theme_path(key))
+            if found:
+                self.menu_theme[key] = found
                 self.update_status(f"🔀 {label} re-pointed at your game folder: {found}")
                 fixed += 1
         return fixed
@@ -9709,6 +11339,12 @@ exit
         lets the window answer. Hands back what subprocess.run would, and raises
         subprocess.TimeoutExpired as it does, so each caller keeps its checks.
         The build itself stays on this thread: Tkinter is not thread-safe.
+
+        A `timeout` of None (No time limit, 1.5.2) waits for the tool however
+        long it takes. Nothing else stops it early: ISCC prints nothing while it
+        packs one big file, so a rule about silence would stop working builds.
+        A stuck tool shows as a clock that keeps counting, and closing Rialto
+        still kills it.
         """
         import queue
         import threading
@@ -9751,7 +11387,7 @@ exit
                 self.show_progress(step, fraction, time.monotonic() - started, detail)
                 if proc.poll() is not None:
                     break
-                if time.monotonic() - started > timeout:
+                if timeout is not None and time.monotonic() - started > timeout:
                     proc.kill()
                     proc.wait()
                     raise subprocess.TimeoutExpired(command, timeout, output="".join(out), stderr="".join(err))
@@ -9767,6 +11403,39 @@ exit
         drain()
         self._running_tool = None
         return subprocess.CompletedProcess(command, proc.returncode, "".join(out), "".join(err))
+
+    def tool_time_limit(self, seconds):
+        """How long a long tool may run: `seconds`, or None when No time limit is ticked (1.5.2, issue #4)."""
+        ticked = getattr(self, "no_time_limit", None)
+        return None if ticked is not None and ticked.get() else seconds
+
+    def run_tool_held(self, command, cwd, timeout, step, doing):
+        """run_tool_watched for a long tool outside a build: a GOG unpack, MakeAppx (1.5.2).
+
+        Held as a build is: the page takes no clicks, BUILD waits, and closing
+        Rialto asks ("Rialto is still `doing`") and stops the tool. Once No time
+        limit lets a tool run for hours, a window that cannot answer or close
+        would be stuck for hours too.
+        """
+        if getattr(self, "_building", False):
+            return self.run_tool_watched(command, cwd, timeout, step)
+        self._building = True
+        self._abandon_build = False
+        self._held_doing = doing
+        self.hold_page(True)
+        try:
+            return self.run_tool_watched(command, cwd, timeout, step)
+        finally:
+            self._building = False
+            self._held_doing = None
+            self._build_line = None
+            self._running_tool = None
+            try:
+                self.hold_page(False)
+                self.refresh_disc_meter()
+            except tk.TclError:
+                pass
+            self.close_if_asked()
 
     def build_ticker(self, step, total=0):
         """A tick to call as slow work goes by: it moves the live line and lets the window answer (B6).
@@ -9936,13 +11605,24 @@ exit
             self.update_status(f"🧹 Final cleanup complete - removed {cleaned_count} items")
             self.update_status("✅ Output folder now contains only ISO file ready for burning")
         
-        # Verify final state
+        # Verify final state. A set names every disc, in its order (1.5.2): the line used to name
+        # only the first image the folder listed, so a two-disc set read as Disc 1 alone.
+        def disc_order(name):
+            digits = re.findall(r"[0-9]+", name)
+            return (int(digits[-1]) if digits else 0, name.lower())
+
         remaining_files = os.listdir(output_path)
-        iso_files = [f for f in remaining_files if f.lower().endswith('.iso')]
-        
-        if iso_files:
-            iso_size = os.path.getsize(os.path.join(output_path, iso_files[0])) / (1024 * 1024)
-            self.update_status(f"📀 Final result: {iso_files[0]} ({iso_size:.1f} MB) ready for disc burning")
+        iso_files = sorted((f for f in remaining_files if f.lower().endswith('.iso')), key=disc_order)
+
+        def described(name):
+            iso_size = os.path.getsize(os.path.join(output_path, name)) / (1024 * 1024)
+            return f"{name} ({iso_size:.1f} MB)"
+
+        if len(iso_files) == 1:
+            self.update_status(f"📀 Final result: {described(iso_files[0])} ready for disc burning")
+        elif iso_files:
+            self.update_status(f"📀 Final result: {len(iso_files)} discs ready for disc burning: "
+                               + ", ".join(described(name) for name in iso_files))
         else:
             self.update_status("❌ Warning: No ISO file found in final output")
 
@@ -10411,7 +12091,8 @@ exit
 
         self.images_made lists every disc image this build finished (one, or each disc of a set), and only
         those: the master sheet, Chksum.md5 and the Build Queue's summary are made from it, never from
-        whatever *.iso lies in the folder. A tool that stops at 30 minutes stops the build.
+        whatever *.iso lies in the folder. A tool that stops at 30 minutes stops the build; with No time
+        limit ticked (1.5.2) it runs until it finishes.
         """
         game_name = meta["GameName"]
         iso_path = os.path.join(output_path, f"{game_name}.iso")
@@ -10421,8 +12102,8 @@ exit
         # falling back to the folder name. 16 chars for Joliet compatibility.
         disc_label = ""
         if hasattr(self, "disc_name_var"):
-            disc_label = sanitize_text(self.disc_name_var.get().strip())
-        disc_label = (disc_label or sanitize_text(game_name) or "GAME")[:16]
+            disc_label = sanitize_text(player_title(self.disc_name_var.get().strip()))
+        disc_label = volume_label(disc_label or sanitize_text(game_name) or "GAME")
 
         self.update_status("Creating the disc image...")
         
@@ -10485,7 +12166,8 @@ exit
                 # any real machine: a 4 GB payload on a spinning disk takes
                 # longer than that before it has finished reading, so the
                 # timeout fired on ordinary discs rather than on stuck ones.
-                # A genuinely stuck tool is still stopped after half an hour.
+                # A genuinely stuck tool is still stopped after half an hour,
+                # unless No time limit is ticked (1.5.2) for a game bigger than that.
                 # Watched (1.5.1, B6): the image grows on disk as the tool writes
                 # it, which gives a percentage for mkisofs and oscdimg alike.
                 made, why = self._write_one_image(kind, tool_path, output_path, iso_path, iso_files, disc_label,
@@ -10507,8 +12189,8 @@ exit
                 self.update_status("❌ ISO creation timed out after 30 minutes")
                 self._remove_partial_iso(iso_path)
                 raise RuntimeError("the disc image was not finished after 30 minutes, so no image was made. "
-                                   "Check free disk space and that no scanner is holding the build folder, "
-                                   "then build again")
+                                   "Check free disk space and that no scanner is holding the build folder. "
+                                   + no_time_limit_hint("30 minutes", "to write its disc image"))
             except Exception as e:
                 if getattr(self, "_abandon_build", False):
                     self._remove_partial_iso(iso_path)
@@ -10606,7 +12288,7 @@ exit
 
     def generate_readme(self, output_path, meta):
         readme_path = os.path.join(output_path, "README.txt")
-        title = sanitize_text(meta.get("Title") or "") or "Game"
+        title = sanitize_text(player_title(meta.get("Title") or "")) or "Game"
         with open(readme_path, "w", encoding="utf-8") as f:
             f.write(f"""=== {title} ===
 
@@ -10642,8 +12324,8 @@ exit
         self.update_status("Creating autorun.inf...")
         
         meta = {k: self.entries[k].get().strip() for k in self.entries}
-        disc_label = (sanitize_text(self.disc_name_var.get().strip())
-                      or sanitize_text(meta.get("Title", "Game Disc"))
+        disc_label = (sanitize_text(player_title(self.disc_name_var.get().strip()))
+                      or sanitize_text(player_title(meta.get("Title", "Game Disc")))
                       or "Game Disc")
         disc_icon_path = self.disc_icon_var.get().strip()
         
@@ -10716,7 +12398,7 @@ Label={disc_label}
         """Create automated compatibility test script"""
         
         meta = {k: self.entries[k].get().strip() for k in self.entries}
-        game_title = escape_batch(meta.get('Title', 'Game')) or "Game"
+        game_title = escape_batch(player_title(meta.get('Title', 'Game'))) or "Game"
 
         # The exe Rialto already located while staging, relative to the disc
         # root. Without it the test only globbed *.exe at the top level, so a
@@ -11160,10 +12842,399 @@ pause
         # banner itself, so a hero with the logo already composited in shows
         # the title twice - once baked into the art and once again in Steam's
         # own overlay, at a different size and position.
-        ("capsule.png", 600, 900, "p", True),        # library portrait, the big one
-        ("wide.png", 920, 430, "", True),            # grid tile
-        ("hero.png", 1920, 620, "_hero", False),     # banner behind the library page
+        ("capsule.png", 600, 900, "p", True),        # Library Capsule: the portrait in the library
+        ("wide.png", 920, 430, "", True),            # Library Header: the wide one, Recent Games
+        # Library Hero: the banner behind the library page. 3840 x 1240 is the
+        # size Steamworks asks for; 1920 x 620 is the half-size copy Steam
+        # makes from it, and what Rialto made until 1.5.2.
+        ("hero.png", 3840, 1240, "_hero", False),
     )
+
+    # The pieces of Steam art a developer can give in Disc Extras (1.5.2), under
+    # the names Steamworks gives them: (the profile's key, the variable, Steam's
+    # name, the file in menu/steam/ without its extension, Steam's own width and
+    # height). The disc menu copies each file into Steam's grid folder. A piece
+    # left empty is made as above, and with no Shortcut Icon the shortcut keeps
+    # the Game Icon. Steam's own size is the one the tooltips give first and the
+    # shape the log measures against; a picture of any other size is taken.
+    STEAM_ART_PIECES = (
+        ("Capsule", "steam_capsule_var", "Library Capsule", "capsule", 600, 900),
+        ("Header", "steam_header_var", "Library Header", "wide", 920, 430),
+        ("Hero", "steam_hero_var", "Library Hero", "hero", 3840, 1240),
+        ("Logo", "steam_logo_var", "Library Logo", "logo", 1280, 720),
+        ("Icon", "steam_icon_var", "Shortcut Icon", "icon", 256, 256),
+    )
+    # Nothing Steam shows needs more. A bigger file is refused before it is
+    # opened, and a picture past this many pixels before it is decoded. A file
+    # the build would write past STEAM_ART_MAX_BYTES is not written, and Rialto
+    # makes that piece.
+    STEAM_ART_MAX_BYTES = 64 * 1024 * 1024
+    STEAM_ART_MAX_PIXELS = 40_000_000
+    # An animation is written again one frame at a time, so what it costs is
+    # time: up to 1,000 frames, and up to as many pixels as 1,000 frames at
+    # Steam's half-size Library Hero, 1920 x 620, which is 250 frames at
+    # 3840 x 1240. One past either goes as its first frame. The tooltips and the
+    # Help Guide give these numbers.
+    STEAM_ART_MAX_FRAMES = 1000
+    STEAM_ART_MAX_FRAME_PIXELS = 1000 * 1920 * 620
+    # An .ico is measured from its own table and headers before any picture in
+    # it is decoded: this many entries at most, each picture up to this many
+    # pixels a side, and all of them together up to this many pixels.
+    STEAM_ICO_MAX_ENTRIES = 64
+    STEAM_ICO_MAX_SIDE = 1024
+    STEAM_ICO_MAX_PIXELS = 4 * 1024 * 1024
+    # What Rialto opens for a piece, by Pillow's name for the format. Steam reads
+    # a PNG or a JPG in its grid folder, and an animated WebP inside a file named
+    # .png, as the tools that set Steam art write it (Steam ROM Manager,
+    # SGDBoop). A still WebP and the rest are written out again as a PNG.
+    STEAM_ART_FORMATS = ("PNG", "JPEG", "MPO", "WEBP", "GIF", "BMP", "TIFF", "TGA", "ICO")
+
+    def steam_art_paths(self):
+        """The developer's own Steam art as a profile keeps it: {"Capsule": path, ...}, "" for a piece not given."""
+        return {key: getattr(self, attr).get().strip() for key, attr, *_rest in self.STEAM_ART_PIECES}
+
+    def set_steam_art(self, stored):
+        """Put a profile's "SteamArt" back on the form. Anything but a path in a known key is left out."""
+        stored = stored if isinstance(stored, dict) else {}
+        for key, attr, *_rest in self.STEAM_ART_PIECES:
+            value = stored.get(key)
+            getattr(self, attr).set(sanitize_text(value).strip() if isinstance(value, str) else "")
+
+    def read_steam_piece(self, key, path):
+        """(picture, file name in menu/steam/, "", note) for one piece of the developer's Steam art.
+
+        Or (None, "", why not, "") when the file itself is the trouble: not
+        there, empty, too large to open, or not a picture. Never for its size
+        or shape: Steam takes its current size, the half-size and the older
+        sizes of each piece, so the picture goes on the disc as the developer
+        made it, and a shape other than Steam's is said in the note beside
+        Steam's size. A logo with no transparent background is taken too, and
+        said.
+
+        The file is opened for what it is, not for what its name says, and is
+        written out again under Rialto's own name, so neither the name nor
+        anything else riding in the file reaches the player's Steam folder. A
+        picture its EXIF Orientation turns is stood upright, and one with a
+        color profile is made sRGB (_steam_frame). A JPG stays a JPG, an
+        animated PNG or WebP keeps its frames (see _write_steam_piece), and the
+        rest go as a PNG. An .ico is measured before any picture in it is
+        decoded, and goes as an .ico made again from its own pictures, every
+        size in it (_ico_pictures).
+        """
+        _key, _attr, name, stem, want_w, want_h = next(
+            piece for piece in self.STEAM_ART_PIECES if piece[0] == key)
+        shown = sanitize_text(os.path.basename(path or "")) or "that file"
+        if not path or not os.path.isfile(path):
+            return None, "", "Rialto cannot find %s for the %s." % (shown, name), ""
+        try:
+            weight = os.path.getsize(path)
+        except OSError:
+            weight = -1
+        if weight <= 0 or weight > self.STEAM_ART_MAX_BYTES:
+            return None, "", "%s is %s for the %s." % (
+                shown, "empty" if weight == 0 else "too large" if weight > 0 else "not readable", name), ""
+
+        said = "an .ico or a .png" if key == "Icon" else "a PNG, a JPG or a WebP"
+        try:
+            with open(path, "rb") as f:
+                head = f.read(4)
+        except OSError:
+            head = b""
+        # Pillow decodes an .ico's largest picture as it opens the file, before its size could be checked here.
+        if head == b"\x00\x00\x01\x00":
+            pictures = self._ico_pictures(path)
+            if not pictures:
+                return None, "", "%s is not an .ico Rialto can read. The %s is %s." % (shown, name, said), ""
+            picture, kind = pictures[0], "ICO"
+            width, height = picture.size
+        else:
+            try:
+                picture = Image.open(path)
+                kind, (width, height) = picture.format, picture.size
+                if kind in self.STEAM_ART_FORMATS and width * height <= self.STEAM_ART_MAX_PIXELS:
+                    picture.load()
+            except Exception:
+                return None, "", "%s is not a picture Rialto can read. The %s is %s." % (shown, name, said), ""
+            if kind not in self.STEAM_ART_FORMATS or width * height > self.STEAM_ART_MAX_PIXELS:
+                picture.close()
+                if kind not in self.STEAM_ART_FORMATS:
+                    return None, "", "%s is a %s file. The %s is %s." % (shown, kind or "different", name, said), ""
+                return None, "", "%s is %d x %d, too large to open as the %s." % (shown, width, height, name), ""
+
+        notes = []
+        source, profile = picture, picture.info.get("icc_profile")
+        turn = self._steam_turn(picture)
+        if turn in (Image.Transpose.TRANSPOSE, Image.Transpose.TRANSVERSE,
+                    Image.Transpose.ROTATE_90, Image.Transpose.ROTATE_270):
+            width, height = height, width  # as a viewer shows it, and as it goes to Steam
+        # The frames of an animated PNG or WebP are kept, the two Steam's art tools write, up to
+        # STEAM_ART_MAX_FRAMES and STEAM_ART_MAX_FRAME_PIXELS. A GIF or an icon goes as its first frame.
+        frames = getattr(picture, "n_frames", 1) if kind in ("PNG", "WEBP") and key != "Icon" else 1
+        if frames > 1 and (frames > self.STEAM_ART_MAX_FRAMES
+                           or frames * width * height > self.STEAM_ART_MAX_FRAME_PIXELS):
+            notes.append("%s has %d frames at %d x %d, more than Rialto keeps, so Steam gets its first frame."
+                         % (shown, frames, width, height))
+            frames = 1
+        elif frames == 1 and kind in ("PNG", "WEBP", "GIF") and getattr(picture, "is_animated", False):
+            notes.append("%s is an animated %s, so Steam gets its first frame."
+                         % (shown, {"WEBP": "WebP"}.get(kind, kind)))
+        if key == "Icon":
+            if width != height:
+                notes.append("%s is %d x %d, not a square. Steam's Shortcut Icon is a square, such as "
+                             "256 x 256 or 512 x 512." % (shown, width, height))
+            if kind == "ICO":
+                filename = "icon.ico"
+            else:
+                filename, picture = "icon.png", self._steam_frame(picture, "RGBA", profile, turn)
+        else:
+            has_alpha = "A" in picture.mode or "transparency" in picture.info
+            if key == "Logo":
+                if not has_alpha or picture.convert("RGBA").getextrema()[3][0] == 255:
+                    notes.append("%s has no transparent background, so Steam draws it over the Library Hero "
+                                 "with its background." % shown)
+            # Within 1 percent of Steam's shape counts as that shape: 602 x 900 is a capsule.
+            elif abs(width * want_h - height * want_w) > 0.01 * height * want_w:
+                notes.append("%s is %d x %d; Steam's %s is %d x %d." % (shown, width, height, name, want_w, want_h))
+            if frames > 1:
+                filename = stem + ".png"
+            elif kind in ("JPEG", "MPO") and key != "Logo":
+                filename, picture = stem + ".jpg", self._steam_frame(picture, "RGB", profile, turn)
+            else:
+                filename, picture = stem + ".png", self._steam_frame(picture, "RGBA" if has_alpha else "RGB",
+                                                                     profile, turn)
+        if picture is not source:
+            source.close()
+        if frames == 1 and (kind, os.path.splitext(filename)[1]) not in (
+                ("PNG", ".png"), ("JPEG", ".jpg"), ("MPO", ".jpg"), ("ICO", ".ico")):
+            notes.append("Rialto writes it as a PNG, which Steam reads.")
+        return picture, filename, "", " ".join(notes)
+
+    @staticmethod
+    def _steam_turn(picture):
+        """The transpose that stands `picture` upright by its EXIF Orientation, as a viewer shows it, or None."""
+        try:
+            orientation = picture.getexif().get(0x0112)
+        except Exception:
+            return None
+        return {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
+                4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
+                6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+                8: Image.Transpose.ROTATE_90}.get(orientation)
+
+    @staticmethod
+    def _steam_frame(frame, mode, profile=None, turn=None):
+        """One frame of a piece as it goes to Steam: in `mode`, its colors made sRGB, upright.
+
+        `profile` is the color profile the file carries, and `turn` is
+        _steam_turn's. A picture in Display P3 or Adobe RGB is converted, so its
+        colors show as the developer saw them; the profile itself is left out,
+        as are EXIF, XMP and everything else in info, so none of it reaches the
+        player's Steam folder. A profile Rialto cannot use is left out, and the
+        colors go as they are.
+        """
+        if profile:
+            try:
+                import io
+                from PIL import ImageCms
+                given = ImageCms.ImageCmsProfile(io.BytesIO(profile))
+                space = given.profile.xcolor_space.strip()
+                if space == "CMYK" and frame.mode == "CMYK":
+                    frame = ImageCms.profileToProfile(frame, given, ImageCms.createProfile("sRGB"), outputMode="RGB")
+                elif space == "RGB":
+                    frame = ImageCms.profileToProfile(frame.convert(mode), given, ImageCms.createProfile("sRGB"),
+                                                      outputMode=mode)
+            except Exception:
+                pass
+        frame = frame.convert(mode)
+        if turn is not None:
+            frame = frame.transpose(turn)
+        frame.info = {}
+        return frame
+
+    def _write_steam_piece(self, picture, target):
+        """Write one piece of the developer's art, as read_steam_piece read it, into menu/steam/.
+
+        A .jpg is written as a JPG and the rest as a PNG. An animated WebP is
+        written again frame by frame as a WebP, with each frame's own timing,
+        under the .png name Steam reads it from. An animated PNG, and an
+        animated WebP whose colors or orientation are put right, go as an
+        animated PNG (_write_apng). Either way one frame is held at a time. A
+        file past STEAM_ART_MAX_BYTES raises, and the caller makes the piece.
+        """
+        frames = getattr(picture, "n_frames", 1)
+        if target.endswith(".jpg"):
+            picture.save(target, "JPEG", quality=95)
+        elif frames == 1:
+            picture.save(target, "PNG")
+        elif picture.format == "WEBP" and not picture.info.get("icc_profile") and self._steam_turn(picture) is None:
+            timing = []
+            for frame in range(frames):
+                picture.seek(frame)
+                picture.load()
+                timing.append(picture.info.get("duration") or 100)
+            picture.seek(0)
+            loop = picture.info.get("loop", 0)
+            picture.save(target, "WEBP", save_all=True, duration=timing, loop=loop, quality=90)
+        else:
+            self._write_apng(picture, target)
+        if os.path.getsize(target) > self.STEAM_ART_MAX_BYTES:
+            raise ValueError("%s is larger than Rialto writes" % os.path.basename(target))
+
+    def _write_apng(self, picture, target):
+        """Write an animated piece as an animated PNG, one frame at a time.
+
+        Pillow's own writer holds every frame until the last, and a palette's
+        colors are lost on the way. Here each frame is made RGBA, sRGB and
+        upright (_steam_frame) and written as it comes: the first whole, then
+        only the part that changed from the frame before, laid over it, as
+        Pillow's writer lays them.
+        """
+        import io
+        import struct
+        import zlib
+        from PIL import ImageChops
+
+        def chunk(kind, body):
+            return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+        def chunks(data):
+            at = 8
+            while at + 8 <= len(data):
+                size, kind = struct.unpack_from(">I4s", data, at)
+                yield kind, data[at + 8:at + 8 + size]
+                at += 12 + size
+
+        count = picture.n_frames
+        profile, turn = picture.info.get("icc_profile"), self._steam_turn(picture)
+        previous, sequence = None, 0
+        with open(target, "wb") as f:
+            for index in range(count):
+                picture.seek(index)
+                duration = picture.info.get("duration") or 100
+                frame = self._steam_frame(picture, "RGBA", profile, turn)
+                whole = (0, 0) + frame.size
+                box = whole if previous is None else \
+                    ImageChops.difference(frame, previous).getbbox(alpha_only=False) or (0, 0, 1, 1)
+                encoded = io.BytesIO()
+                (frame if box == whole else frame.crop(box)).save(encoded, "PNG")
+                found = list(chunks(encoded.getvalue()))
+                if index == 0:
+                    f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", dict(found)[b"IHDR"])
+                            + chunk(b"acTL", struct.pack(">II", count, picture.info.get("loop", 0))))
+                # The frame's place and timing: no disposal, and its pixels replace those under it.
+                f.write(chunk(b"fcTL", struct.pack(">IIIIIHHBB", sequence, box[2] - box[0], box[3] - box[1],
+                                                   box[0], box[1], min(int(round(duration)), 65535), 1000, 0, 0)))
+                sequence += 1
+                for kind, body in found:
+                    if kind != b"IDAT":
+                        continue
+                    if index == 0:
+                        f.write(chunk(b"IDAT", body))
+                    else:
+                        f.write(chunk(b"fdAT", struct.pack(">I", sequence) + body))
+                        sequence += 1
+                previous = frame
+                if f.tell() > self.STEAM_ART_MAX_BYTES:
+                    raise ValueError("%s is larger than Rialto writes" % os.path.basename(target))
+            f.write(chunk(b"IEND", b""))
+
+    def _ico_pictures(self, path):
+        """The pictures in an .ico, largest first, one of each size, as RGBA and nothing else; or None.
+
+        Every entry is measured from the table and its picture's own header
+        before anything in the file is decoded: a PNG's IHDR, or a bitmap's
+        header of 40, 108 or 124 bytes, whose height counts its mask. At most
+        STEAM_ICO_MAX_ENTRIES entries, each lying inside the file, each
+        picture up to STEAM_ICO_MAX_SIDE a side, and STEAM_ICO_MAX_PIXELS for
+        all of them together. Then each is decoded on its own, and where two
+        are one size the one with more color is kept. None when the file is
+        not such an .ico.
+        """
+        import io
+        import struct
+        import warnings
+        try:
+            with open(path, "rb") as f:
+                data = f.read(self.STEAM_ART_MAX_BYTES + 1)
+        except OSError:
+            return None
+        if len(data) < 6 or len(data) > self.STEAM_ART_MAX_BYTES:
+            return None
+        reserved, kind, count = struct.unpack_from("<HHH", data, 0)
+        start = 6 + 16 * count
+        if reserved != 0 or kind != 1 or not 1 <= count <= self.STEAM_ICO_MAX_ENTRIES or len(data) < start:
+            return None
+        measured, pixels = [], 0
+        for index in range(count):
+            size, at = struct.unpack_from("<II", data, 6 + 16 * index + 8)
+            block = data[at:at + size]
+            if at < start or size < 26 or len(block) != size:
+                return None
+            if block.startswith(b"\x89PNG\r\n\x1a\n") and block[12:16] == b"IHDR":
+                width, height = struct.unpack_from(">II", block, 16)
+                bits = block[24] * {2: 3, 4: 2, 6: 4}.get(block[25], 1)
+            elif struct.unpack_from("<I", block)[0] in (40, 108, 124):
+                width, height = struct.unpack_from("<ii", block, 4)
+                height //= 2  # the picture and its mask
+                bits = struct.unpack_from("<H", block, 14)[0]
+            else:
+                return None
+            if not (0 < width <= self.STEAM_ICO_MAX_SIDE and 0 < height <= self.STEAM_ICO_MAX_SIDE):
+                return None
+            pixels += width * height
+            if pixels > self.STEAM_ICO_MAX_PIXELS:
+                return None
+            measured.append((width, height, bits, block))
+
+        kept = {}
+        for width, height, bits, block in measured:
+            if block.startswith(b"\x89PNG"):
+                given = io.BytesIO(block)
+            else:
+                # A bitmap is read as an .ico of that entry alone, so Pillow reads its mask as it reads any .ico's.
+                given = io.BytesIO(struct.pack("<HHH", 0, 1, 1) + struct.pack(
+                    "<BBBBHHII", width if width < 256 else 0, height if height < 256 else 0, 0, 0, 1, bits,
+                    len(block), 22) + block)
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    with Image.open(given) as picture:
+                        picture.load()
+                        if picture.size != (width, height):
+                            return None
+                        made = picture.convert("RGBA")
+            except Exception:
+                return None
+            made.info = {}
+            if (width, height) not in kept or bits > kept[(width, height)][0]:
+                kept[(width, height)] = (bits, made)
+        return sorted((made for _bits, made in kept.values()), key=lambda made: -made.width * made.height)
+
+    def _ico_as_given(self, path):
+        """The Shortcut Icon's .ico made again from its own pictures, every size in it, or None.
+
+        A multi-size .ico is how Steam and Windows draw an icon sharp at each
+        size, so every size the developer made goes on the disc. Each is
+        written again as a PNG under a table Rialto writes, so nothing else in
+        the file, between, inside or after its pictures, reaches the disc.
+        None when _ico_pictures finds it is not an .ico Rialto can read.
+        """
+        import io
+        import struct
+        pictures = self._ico_pictures(path)
+        if not pictures:
+            return None
+        table, blocks = [], []
+        place = 6 + 16 * len(pictures)
+        for picture in pictures:
+            encoded = io.BytesIO()
+            picture.save(encoded, "PNG")
+            blocks.append(encoded.getvalue())
+            table.append(struct.pack("<BBBBHHII", picture.width if picture.width < 256 else 0,
+                                     picture.height if picture.height < 256 else 0, 0, 0, 1, 32,
+                                     len(blocks[-1]), place))
+            place += len(blocks[-1])
+        return struct.pack("<HHH", 0, 1, len(pictures)) + b"".join(table) + b"".join(blocks)
 
     def steam_art_sources(self):
         """The background and logo the Steam art is composed from.
@@ -11185,6 +13256,18 @@ pause
             logo_path = ""
         return background, logo_path
 
+    # The backgrounds _background_still takes a frame from with ffmpeg.
+    STEAM_VIDEO_BACKGROUNDS = (".mp4", ".avi", ".mov", ".webm", ".mkv")
+
+    def _steam_game_logo(self, logo_path):
+        """The Game Logo as the Steam art uses it and stages it: RGBA, upright and sRGB (_steam_frame), or None."""
+        try:
+            with Image.open(logo_path) as source:
+                source.load()
+                return self._steam_frame(source, "RGBA", source.info.get("icc_profile"), self._steam_turn(source))
+        except Exception:
+            return None
+
     def _background_still(self, background):
         """One RGB frame out of whatever the author chose as a background.
 
@@ -11197,7 +13280,7 @@ pause
             return None
         extension = os.path.splitext(background)[1].lower()
 
-        if extension in (".mp4", ".avi", ".mov", ".webm", ".mkv"):
+        if extension in self.STEAM_VIDEO_BACKGROUNDS:
             ffmpeg = shutil.which("ffmpeg")
             if not ffmpeg:
                 return None
@@ -11258,35 +13341,93 @@ pause
         return canvas
 
     def stage_steam_art(self, menu_dir):
-        """Compose Steam library art from the disc's own background and logo.
+        """Steam library art for the disc: the developer's own pieces, and the rest composed.
 
         Steam shows a non-Steam game as a grey box with the exe's filename
         under it. Every Rialto disc already has a background and a logo, so
         there is no reason for it to look like that.
 
-        Works the same for every game: no lookup, no download, no per-title
-        anything. Background missing or unreadable, a tinted plate stands in;
-        logo missing, the background carries it alone; both missing, nothing is
-        written and the build carries on exactly as it used to.
+        A piece the developer gave in Disc Extras (1.5.2) goes on the disc in
+        place of the one Rialto would make, at whatever size it was given; a
+        file Rialto cannot read or write is said in the log and that piece made
+        as before. Either way the build goes on. The rest works the same for every game: no
+        lookup, no download, no per-title anything. Background missing or
+        unreadable, a tinted plate stands in; logo missing, the background
+        carries it alone; both missing and nothing given, nothing is written
+        and the build carries on exactly as it used to.
         """
         background, logo_path = self.steam_art_sources()
 
-        logo = None
-        if logo_path:
+        def instead(key, name):
+            return "The shortcut keeps the Game Icon instead." if key == "Icon" else "Rialto makes the %s instead." % name
+
+        given = []
+        for key, attr, name, *_rest in self.STEAM_ART_PIECES:
+            path = getattr(self, attr).get().strip()
+            if not path:
+                continue
             try:
-                logo = Image.open(logo_path).convert("RGBA")
-                logo.load()
+                picture, filename, problem, note = self.read_steam_piece(key, path)
             except Exception:
-                logo = None
+                picture, problem = None, "Rialto could not read %s for the %s." % (
+                    sanitize_text(os.path.basename(path)), name)
+            if problem:
+                self.update_status("⚠️ %s %s" % (problem, instead(key, name)))
+                continue
+            given.append((key, name, path, picture, filename, note))
+
+        logo = self._steam_game_logo(logo_path) if logo_path else None
 
         still = self._background_still(background)
-        if still is None and logo is None:
+        if still is None and logo is None and not given:
             return  # nothing at all to work with
 
         steam_dir = os.path.join(menu_dir, "steam")
+        own, yours, made = {}, [], []
         try:
             os.makedirs(steam_dir, exist_ok=True)
+            # A folder an earlier build left may hold a piece under its other extension.
+            for _key, _attr, _name, stem, *_size in self.STEAM_ART_PIECES:
+                for extension in (".png", ".jpg", ".ico"):
+                    try:
+                        os.remove(os.path.join(steam_dir, stem + extension))
+                    except OSError:
+                        pass
+            # A piece that cannot be written is made by Rialto, as a refused one is; the rest still go.
+            for key, name, path, picture, filename, note in given:
+                target = os.path.join(steam_dir, filename)
+                try:
+                    if filename.endswith(".ico"):
+                        icon = self._ico_as_given(path)
+                        if icon is None:
+                            raise ValueError("not an .ico")
+                        with open(target, "wb") as f:
+                            f.write(icon)
+                    else:
+                        self._write_steam_piece(picture, target)
+                except Exception:
+                    try:
+                        os.remove(target)
+                    except OSError:
+                        pass
+                    self.update_status("⚠️ Rialto could not write %s for the %s. %s" % (
+                        sanitize_text(os.path.basename(path)), name, instead(key, name)))
+                    continue
+                own[os.path.splitext(filename)[0]] = picture
+                yours.append(name)
+                if note:
+                    self.update_status("ℹ️ %s: %s" % (name, note))
+            if logo is None and "logo" in own:
+                # No Game Logo: the Library Logo goes on the composed art instead, its first frame if it moves.
+                if getattr(own["logo"], "n_frames", 1) > 1:
+                    own["logo"].seek(0)
+                logo = own["logo"].convert("RGBA")
+
+            pieces = {stem: name for _key, _attr, name, stem, *_size in self.STEAM_ART_PIECES}
             for filename, width, height, _suffix, carries_logo in self.STEAM_ART:
+                stem = os.path.splitext(filename)[0]
+                if stem in own or (still is None and logo is None):
+                    continue
                 if still is not None:
                     canvas = self._fill_crop(still, width, height)
                 else:
@@ -11295,19 +13436,29 @@ pause
                     self._overlay_logo(canvas, logo, width, height,
                                        dim=still is not None)
                 canvas.save(os.path.join(steam_dir, filename), "PNG")
+                made.append(pieces[stem])
 
             # The transparent logo goes across untouched: Steam draws it over
             # the hero art itself and wants the alpha intact.
-            if logo is not None:
+            if logo is not None and "logo" not in own:
                 logo.save(os.path.join(steam_dir, "logo.png"), "PNG")
+                made.append("Library Logo")
 
-            made = "capsule, grid, hero" + (" and logo" if logo is not None else "")
-            if still is None:
-                made += " (from the logo alone; no usable background image)"
-            self.update_status(f"✅ Made Steam library art: {made}")
+            said = []
+            if yours:
+                said.append("yours: " + ", ".join(yours))
+            if made:
+                plain = still is None and made != ["Library Logo"]
+                said.append("made by Rialto: " + ", ".join(made)
+                            + (" (from the logo alone; no usable background image)" if plain else ""))
+            if said:
+                self.update_status(f"✅ Steam library art, {'; '.join(said)}")
         except Exception as e:
             # Cosmetic. A disc with no Steam art is the old behaviour.
             self.update_status(f"ℹ️ Skipped Steam library art: {e}")
+        finally:
+            for _key, _name, _path, picture, *_rest in given:
+                picture.close()
 
     @staticmethod
     def _fill_crop(source, width, height):
@@ -11446,6 +13597,57 @@ pause
             if removed_branding:
                 self.update_status(f"🏷️ White label: removed stale branding ({', '.join(removed_branding)})")
 
+        # The menu's own font (1.5.2), and its licence: an open font licence has
+        # to travel with the font, so a font with none is not staged at all
+        # (menu_font_check; menu_theme_config says why).
+        for stale in ("menu_font.ttf", "menu_font.otf", "menu_font_license.txt"):
+            if os.path.exists(os.path.join(menu_dir, stale)):
+                try:
+                    os.remove(os.path.join(menu_dir, stale))
+                except OSError:
+                    pass
+        font, licence, _family, _problem = self.menu_font_choice()
+        if font:
+            try:
+                shutil.copy2(font, os.path.join(menu_dir, "menu_font" + os.path.splitext(font)[1].lower()))
+                shutil.copy2(licence, os.path.join(menu_dir, "menu_font_license.txt"))
+                self.update_status(f"✅ Copied the menu's font, {font}, and its license, {licence}")
+            except OSError as e:
+                for staged in ("menu_font" + os.path.splitext(font)[1].lower(), "menu_font_license.txt"):
+                    try:
+                        os.remove(os.path.join(menu_dir, staged))
+                    except OSError:
+                        pass
+                self.update_status(f"⚠️ The menu's font or its license could not be copied, so the menu uses "
+                                   f"its own font: {e}")
+
+        # The Menu Music (1.5.2), as menu_music.wav: checked again here, as the
+        # menu will play it, and a stale copy from an earlier build never stays.
+        music_dest = os.path.join(menu_dir, "menu_music.wav")
+        if os.path.exists(music_dest):
+            try:
+                os.remove(music_dest)
+            except OSError:
+                pass
+        music = self.menu_music_var.get().strip()
+        if music and not os.path.isfile(music):
+            self.update_status(f"⚠️ Menu music not found, building without it: {music}")
+        elif music:
+            _seconds, size, problem = menu_music_check(music)
+            if problem:
+                self.update_status(f"⚠️ The menu music is left out, so the menu is quiet: {problem}.")
+            else:
+                try:
+                    shutil.copy2(music, music_dest)
+                    self.update_status("✅ Copied the menu music")
+                    self.warn_menu_music_large(size)
+                except OSError as e:
+                    try:
+                        os.remove(music_dest)
+                    except OSError:
+                        pass
+                    self.update_status(f"⚠️ The menu music could not be copied, so the menu is quiet: {e}")
+
 
 # The disc menu, as source. Nothing about any particular game is spliced into
 # this string: the title, the game list, branding, mods, bonus and the language
@@ -11517,9 +13719,31 @@ def player_prefs_path(title):
     return os.path.join(base, "Rialto Disc Menu", key, "player.json")
 
 
-def read_player_prefs(title):
+def menu_earlier_titles(raw):
+    """menu_config.json's earlier_titles (1.5.2): the titles a disc of this game from
+    before 4 Nov kept the player's choices under, each cleaned as MENU_TITLE is."""
+    titles = []
+    for item in (raw if isinstance(raw, list) else [])[:8]:
+        if isinstance(item, str):
+            text = "".join(c if (c >= " " and c != chr(127)) else " " for c in item).strip()[:200]
+            if text and text != MENU_TITLE and text not in titles:
+                titles.append(text)
+    return titles
+
+
+EARLIER_TITLES = menu_earlier_titles(MENU_CONFIG.get("earlier_titles"))
+
+
+def read_player_prefs(title, earlier=()):
     try:
         path = player_prefs_path(title)
+        if not os.path.exists(path):
+            # Not kept under this title yet: an upgrade from a disc that named
+            # the game with the store's format kept them under that title.
+            for other in earlier:
+                if os.path.isfile(player_prefs_path(other)):
+                    path = player_prefs_path(other)
+                    break
         if os.path.getsize(path) > 64 * 1024:
             return {"stars": [], "sort": "disc", "lang": ""}
         with open(path, encoding="utf-8") as f:
@@ -11532,9 +13756,14 @@ def read_player_prefs(title):
                     stars.append(x)
             # Only a name the menu has a translation for is ever used; see GameMenu.
             lang = data.get("lang")
-            return {"stars": stars,
-                    "sort": "az" if data.get("sort") == "az" else "disc",
-                    "lang": lang if isinstance(lang, str) and len(lang) < 40 else ""}
+            prefs = {"stars": stars,
+                     "sort": "az" if data.get("sort") == "az" else "disc",
+                     "lang": lang if isinstance(lang, str) and len(lang) < 40 else ""}
+            # Sound On or Off on a disc with Menu Music (1.5.2). Kept only when the
+            # file holds one, so a disc without music writes the file as it always did.
+            if isinstance(data.get("sound"), bool):
+                prefs["sound"] = data["sound"]
+            return prefs
     except Exception:
         # Anything at all: a file nested deep enough raises RecursionError, and a
         # menu that will not start on this PC is worse than one that forgot.
@@ -11551,6 +13780,43 @@ def write_player_prefs(title, prefs):
         os.replace(path + ".tmp", path)
     except OSError:
         pass
+
+# Menu Music (1.5.2): a WAV that loops under the menu, played by Windows itself
+# (PlaySound), so the menu needs no codec and nothing of Qt's multimedia, and a
+# disc plays it the same on every PC. Not Windows, no winsound: the menu is quiet.
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
+# PlaySound holds the whole file in memory while it plays. Rialto refuses a
+# larger file before the build; this bounds what a rewritten config can name.
+MENU_MUSIC_MAX_BYTES = 256 * 1024 * 1024
+
+
+def menu_music_path(config):
+    """The Menu Music file menu_config.json names, or "".
+
+    menu_config.json can be rewritten, so "music" is held as the theme's font
+    is: a plain .wav file name, a file inside the menu's own folder (no folder,
+    drive or stream in the name, nor a link out of it), there, and no larger
+    than MENU_MUSIC_MAX_BYTES. Anything else and the menu is quiet.
+    """
+    name = config.get("music")
+    if not (isinstance(name, str) and 0 < len(name) <= 128 and name == os.path.basename(name)
+            and ":" not in name and all(c >= ' ' and c != '\\x7f' for c in name)
+            and os.path.splitext(name)[1].lower() == ".wav"):
+        return ""
+    folder = menu_dir()
+    path = os.path.join(folder, name)
+    try:
+        if os.path.normcase(os.path.dirname(os.path.realpath(path))) != os.path.normcase(os.path.realpath(folder)):
+            return ""
+        if os.path.isfile(path) and 0 < os.path.getsize(path) <= MENU_MUSIC_MAX_BYTES:
+            return path
+    except (OSError, ValueError):
+        pass
+    return ""
 
 # Compatibility mode: a launch argument the author's game already understands,
 # offered as a button so the player never has to type one, such as a switch
@@ -11642,6 +13908,148 @@ def load_xinput():
     return None
 
 
+class LetterEdges(QtWidgets.QWidget):
+    """The soft dark edge round the menu's words, on art that carries its own title (1.5.2).
+
+    A QGraphicsDropShadowEffect on each label blurred the label again on every
+    frame of an animated background: about three times a plain label's cost,
+    15.6 ms a frame at 4K. Here each label is drawn once with its edge, through
+    the same effect off screen, and kept as a picture. This layer lies under
+    the menu column and draws the pictures; the labels draw nothing themselves.
+    A label is drawn again only when its words, its look, its size or its
+    state (under the pointer, focused, pressed) change. Each picture is held
+    to the boxes its label sits in, as the effect was, so a game's line
+    scrolled out of its list stays out of sight.
+    """
+
+    def __init__(self, parent, radius):
+        super().__init__(parent)
+        self.setGeometry(parent.rect())
+        parent.installEventFilter(self)  # as large as the window's picture, once the window has its size
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self.radius = radius
+        self.labels = {}    # id: the label
+        self.pictures = {}  # id: (the label's state when drawn, the picture)
+        self._drawing = None
+
+    def add(self, widget):
+        key = id(widget)
+        if key in self.labels:
+            return
+        # Kept until a paint finds the label gone (a game's line rebuilt after a
+        # star): a slot on its destroyed signal could run while the window
+        # itself is being taken down, after this layer.
+        self.labels[key] = widget
+        widget.installEventFilter(self)
+        self.update()
+
+    def state(self, widget):
+        """Everything that changes how a label looks."""
+        return (widget.width(), widget.height(), widget.text(), widget.styleSheet(), widget.isEnabled(),
+                widget.hasFocus(), widget.underMouse(), widget.isDown() if hasattr(widget, "isDown") else False)
+
+    def picture(self, widget):
+        """The label and its edge, as the effect draws them, starting `radius` up and left of the label."""
+        face = QtGui.QImage(widget.size(), QtGui.QImage.Format_ARGB32_Premultiplied)
+        face.fill(0)
+        self._drawing = widget
+        try:
+            widget.render(face, QtCore.QPoint(), QtGui.QRegion(), QtWidgets.QWidget.DrawChildren)
+        finally:
+            self._drawing = None
+        scene = QtWidgets.QGraphicsScene()
+        item = scene.addPixmap(QtGui.QPixmap.fromImage(face))
+        edge = QtWidgets.QGraphicsDropShadowEffect()
+        edge.setBlurRadius(self.radius)
+        edge.setOffset(0, 0)
+        edge.setColor(QtGui.QColor(0, 0, 0, 255))
+        item.setGraphicsEffect(edge)
+        pad = self.radius
+        picture = QtGui.QImage(widget.width() + 2 * pad, widget.height() + 2 * pad,
+                               QtGui.QImage.Format_ARGB32_Premultiplied)
+        picture.fill(0)
+        painter = QtGui.QPainter(picture)
+        scene.render(painter, QtCore.QRectF(picture.rect()),
+                     QtCore.QRectF(-pad, -pad, picture.width(), picture.height()))
+        painter.end()
+        return picture
+
+    def held_to(self, widget):
+        """The part of this layer a label's picture may cover: inside every box the label sits in."""
+        base = self.parentWidget()
+        room = self.rect()
+        box = widget.parentWidget()
+        while box is not None and box is not base:
+            room = room.intersected(QtCore.QRect(box.mapTo(base, QtCore.QPoint(0, 0)), box.size()))
+            box = box.parentWidget()
+        return room
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        base = self.parentWidget()
+        for key, widget in list(self.labels.items()):
+            try:
+                if not widget.isVisible():
+                    continue
+                state = self.state(widget)
+                kept = self.pictures.get(key)
+                made = kept is None or kept[0] != state
+                if made:
+                    kept = self.pictures[key] = (state, self.picture(widget))
+                corner = widget.mapTo(base, QtCore.QPoint(0, 0)) - QtCore.QPoint(self.radius, self.radius)
+                painter.save()
+                painter.setClipRect(self.held_to(widget))
+                painter.drawImage(corner, kept[1])
+                painter.restore()
+                # A label repaints only its own box; its edge reaches past it, so that is drawn again too.
+                whole = QtCore.QRect(corner, kept[1].size())
+                if made and not event.rect().contains(whole):
+                    self.update(whole)
+            except RuntimeError:  # the label is gone
+                self.labels.pop(key, None)
+                self.pictures.pop(key, None)
+        painter.end()
+
+    def eventFilter(self, widget, event):
+        kind = event.type()
+        if widget is self.parentWidget():
+            if kind == QtCore.QEvent.Resize:
+                self.setGeometry(widget.rect())
+            return False
+        if kind == QtCore.QEvent.Paint:
+            return widget is not self._drawing  # this layer draws the label; it paints only for its picture
+        if kind in (QtCore.QEvent.Move, QtCore.QEvent.Resize, QtCore.QEvent.Show, QtCore.QEvent.Hide):
+            self.update()
+        return False
+
+
+class ArrowComboBox(QtWidgets.QComboBox):
+    """The menu language box, its arrow drawn as a triangle (1.5.2).
+
+    A style sheet's border triangle (transparent sides, a colored top) is drawn
+    by Qt as a small bar, so the style sheet draws no arrow and this paints it:
+    8 by 5 at the menu's scale, 10 in from the right edge, white.
+    """
+
+    def __init__(self, scale):
+        super().__init__()
+        self.scale = scale
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        s = self.scale
+        right = self.width() - 10 * s
+        middle = self.height() / 2.0
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor("#ffffff"))
+        painter.drawPolygon(QtGui.QPolygonF([QtCore.QPointF(right - 8 * s, middle - 2.5 * s),
+                                             QtCore.QPointF(right, middle - 2.5 * s),
+                                             QtCore.QPointF(right - 4 * s, middle + 2.5 * s)]))
+        painter.end()
+
+
 class GameMenu(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -11671,7 +14079,7 @@ class GameMenu(QtWidgets.QWidget):
         self.menu_title = MENU_TITLE
         self.games = [g for g in self.menu_config.get("games", [])
                       if isinstance(g, dict) and g.get("exe")]
-        self.player_prefs = read_player_prefs(MENU_TITLE)
+        self.player_prefs = read_player_prefs(MENU_TITLE, EARLIER_TITLES)
 
         # Comprehensive language translations
         self.translations = {
@@ -11710,6 +14118,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "موجودة في Steam بالفعل",
                 "steam_already": "سبق أن أُضيفت %s إلى مكتبة Steam لديك.",
                 "steam_already_detail": "لم يتم تغيير أي شيء. احذفها من Steam أولاً إذا أردت إضافتها مرة أخرى.",
+                "steam_art_updated": "تم تحديث صورها من هذا القرص.",
                 "steam_failed_title": "تعذّرت الإضافة إلى Steam",
                 "steam_blocked": "تعذّر تحديث قائمة Steam للألعاب غير التابعة لـ Steam.",
                 "steam_blocked_detail": "أغلق Steam تمامًا وحاول مرة أخرى. لم يتم تغيير أي شيء، والقائمة السابقة كما هي.",
@@ -11722,6 +14131,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "تم البحث في:",
                 "and_more": "... و%d أخرى",
                 "play_again": "جرّب الضغط على «العب اللعبة» مرة أخرى أولاً: قد يكون المجلد المثبّت حديثًا لا يزال قيد الفحص. إذا استمر الفشل، فربما لم يكتمل نسخ مجلد اللعبة.",
+                "sound_on": "الصوت: تشغيل", "sound_off": "الصوت: إيقاف",
                 "yes": "نعم", "no": "لا", "cancel": "إلغاء"
             },
             "Bulgarian": {
@@ -11759,6 +14169,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Вече е в Steam",
                 "steam_already": "%s вече е във вашата Steam библиотека.",
                 "steam_already_detail": "Нищо не е променено. Ако искате да добавите играта отново, първо я премахнете от Steam.",
+                "steam_art_updated": "Изображенията ѝ са обновени от този диск.",
                 "steam_failed_title": "Неуспешно добавяне в Steam",
                 "steam_blocked": "Списъкът на Steam с игри извън Steam не можа да бъде обновен.",
                 "steam_blocked_detail": "Затворете Steam напълно и опитайте отново. Нищо не е променено и предишният списък е непокътнат.",
@@ -11771,6 +14182,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Търсено в:",
                 "and_more": "... и още %d",
                 "play_again": "Първо опитайте „Играй“ още веднъж: току-що инсталирана папка понякога все още се сканира. Ако продължава да не става, копирането на папката на играта може да не е завършило.",
+                "sound_on": "Звук: Вкл.", "sound_off": "Звук: Изкл.",
                 "yes": "Да", "no": "Не", "cancel": "Отказ"
             },
             "Chinese (Simplified)": {
@@ -11808,6 +14220,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "已在 Steam 中",
                 "steam_already": "%s 已在你的 Steam 库中。",
                 "steam_already_detail": "未做任何更改。如果想重新添加，请先从 Steam 中移除它。",
+                "steam_art_updated": "已用本光盘更新它的图片。",
                 "steam_failed_title": "无法添加到 Steam",
                 "steam_blocked": "无法更新 Steam 的非 Steam 游戏列表。",
                 "steam_blocked_detail": "请完全关闭 Steam 后再试一次。未做任何更改，原有列表保持不变。",
@@ -11820,6 +14233,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "查找位置：",
                 "and_more": "……还有 %d 个",
                 "play_again": "请先再按一次开始游戏：刚安装好的文件夹有时仍在被扫描。如果仍然失败，可能是游戏文件夹还没有复制完成。",
+                "sound_on": "声音：开", "sound_off": "声音：关",
                 "yes": "是", "no": "否", "cancel": "取消"
             },
             "Chinese (Traditional)": {
@@ -11857,6 +14271,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "已在 Steam 中",
                 "steam_already": "%s 已在你的 Steam 收藏庫中。",
                 "steam_already_detail": "未做任何變更。若想重新加入，請先從 Steam 移除它。",
+                "steam_art_updated": "已用本光碟更新它的圖片。",
                 "steam_failed_title": "無法加入 Steam",
                 "steam_blocked": "無法更新 Steam 的非 Steam 遊戲清單。",
                 "steam_blocked_detail": "請完全關閉 Steam 後再試一次。未做任何變更，原本的清單維持不變。",
@@ -11869,6 +14284,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "尋找位置：",
                 "and_more": "……還有 %d 個",
                 "play_again": "請先再按一次「開始遊戲」：剛安裝好的資料夾有時仍在掃描中。如果還是失敗，可能是遊戲資料夾尚未複製完成。",
+                "sound_on": "聲音：開", "sound_off": "聲音：關",
                 "yes": "是", "no": "否", "cancel": "取消"
             },
             "Croatian": {
@@ -11906,6 +14322,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Već je u Steamu",
                 "steam_already": "%s već se nalazi u vašoj Steam biblioteci.",
                 "steam_already_detail": "Ništa nije promijenjeno. Ako je želite ponovno dodati, najprije je uklonite iz Steama.",
+                "steam_art_updated": "Njezine slike ažurirane su s ovog diska.",
                 "steam_failed_title": "Dodavanje u Steam nije uspjelo",
                 "steam_blocked": "Steamov popis igara izvan Steama nije moguće ažurirati.",
                 "steam_blocked_detail": "Potpuno zatvorite Steam i pokušajte ponovno. Ništa nije promijenjeno, a prethodni popis ostao je netaknut.",
@@ -11918,6 +14335,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Traženo u:",
                 "and_more": "... i još %d",
                 "play_again": "Najprije još jednom pokušajte „Igraj”: tek instalirana mapa ponekad se još skenira. Ako i dalje ne uspijeva, kopiranje mape igre možda nije dovršeno.",
+                "sound_on": "Zvuk: Uključen", "sound_off": "Zvuk: Isključen",
                 "yes": "Da", "no": "Ne", "cancel": "Otkaži"
             },
             "Czech": {
@@ -11955,6 +14373,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Už je ve Steamu",
                 "steam_already": "%s už je ve vaší knihovně Steam.",
                 "steam_already_detail": "Nic nebylo změněno. Pokud ji chcete přidat znovu, nejprve ji ze Steamu odeberte.",
+                "steam_art_updated": "Její obrázky byly aktualizovány z tohoto disku.",
                 "steam_failed_title": "Přidání do Steamu se nezdařilo",
                 "steam_blocked": "Seznam her mimo Steam se ve Steamu nepodařilo aktualizovat.",
                 "steam_blocked_detail": "Steam úplně zavřete a zkuste to znovu. Nic nebylo změněno a předchozí seznam zůstal beze změny.",
@@ -11967,6 +14386,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Hledáno v:",
                 "and_more": "... a dalších %d",
                 "play_again": "Nejprve zkuste ještě jednou „Hrát“: čerstvě nainstalovaná složka se někdy ještě prověřuje. Pokud to stále selhává, kopírování složky hry možná nebylo dokončeno.",
+                "sound_on": "Zvuk: Zapnuto", "sound_off": "Zvuk: Vypnuto",
                 "yes": "Ano", "no": "Ne", "cancel": "Zrušit"
             },
             "Danish": {
@@ -12004,6 +14424,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Allerede i Steam",
                 "steam_already": "%s er allerede i dit Steam-bibliotek.",
                 "steam_already_detail": "Intet blev ændret. Fjern det fra Steam først, hvis du vil tilføje det igen.",
+                "steam_art_updated": "Spillets billeder er opdateret fra denne disk.",
                 "steam_failed_title": "Kunne ikke føje til Steam",
                 "steam_blocked": "Steams liste over ikke-Steam-spil kunne ikke opdateres.",
                 "steam_blocked_detail": "Luk Steam helt, og prøv igen. Intet blev ændret, og den tidligere liste er urørt.",
@@ -12016,6 +14437,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Ledte i:",
                 "and_more": "... og %d mere",
                 "play_again": "Prøv »Spil« én gang til først: En nyinstalleret mappe bliver nogle gange stadig scannet. Hvis det bliver ved med at mislykkes, er spilmappen måske ikke færdig med at blive kopieret.",
+                "sound_on": "Lyd: Til", "sound_off": "Lyd: Fra",
                 "yes": "Ja", "no": "Nej", "cancel": "Annuller"
             },
             "Dutch": {
@@ -12053,6 +14475,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Staat al in Steam",
                 "steam_already": "%s staat al in je Steam-bibliotheek.",
                 "steam_already_detail": "Er is niets gewijzigd. Verwijder het eerst uit Steam als je het opnieuw wilt toevoegen.",
+                "steam_art_updated": "De afbeeldingen van het spel zijn bijgewerkt vanaf deze schijf.",
                 "steam_failed_title": "Toevoegen aan Steam mislukt",
                 "steam_blocked": "De lijst met niet-Steam-spellen van Steam kon niet worden bijgewerkt.",
                 "steam_blocked_detail": "Sluit Steam helemaal af en probeer het opnieuw. Er is niets gewijzigd en de vorige lijst is onaangeroerd.",
@@ -12065,6 +14488,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Gezocht in:",
                 "and_more": "... en nog %d",
                 "play_again": "Probeer eerst nog een keer ‘Spelen’: een net geïnstalleerde map wordt soms nog gescand. Blijft het mislukken, dan is de spelmap misschien nog niet helemaal gekopieerd.",
+                "sound_on": "Geluid: Aan", "sound_off": "Geluid: Uit",
                 "yes": "Ja", "no": "Nee", "cancel": "Annuleren"
             },
             "English": {
@@ -12102,6 +14526,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Already in Steam",
                 "steam_already": "%s is already in your Steam library.",
                 "steam_already_detail": "Nothing was changed. Remove it from Steam first if you want to add it again.",
+                "steam_art_updated": "Its pictures are updated from this disc.",
                 "steam_failed_title": "Could not add to Steam",
                 "steam_blocked": "Steam's list of non-Steam games could not be updated.",
                 "steam_blocked_detail": "Close Steam completely and try again. Nothing was changed, and the previous list is untouched.",
@@ -12114,6 +14539,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Looked in:",
                 "and_more": "... and %d more",
                 "play_again": "Try Play once more first: a freshly installed folder is sometimes still being scanned. If it keeps failing, the game folder may not have finished copying.",
+                "sound_on": "Sound: On", "sound_off": "Sound: Off",
                 "yes": "Yes", "no": "No", "cancel": "Cancel"
             },
             "Finnish": {
@@ -12151,6 +14577,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Jo Steamissa",
                 "steam_already": "%s on jo Steam-kirjastossasi.",
                 "steam_already_detail": "Mitään ei muutettu. Poista se ensin Steamista, jos haluat lisätä sen uudelleen.",
+                "steam_art_updated": "Sen kuvat päivitettiin tältä levyltä.",
                 "steam_failed_title": "Steamiin lisääminen epäonnistui",
                 "steam_blocked": "Steamin luetteloa muista kuin Steam-peleistä ei voitu päivittää.",
                 "steam_blocked_detail": "Sulje Steam kokonaan ja yritä uudelleen. Mitään ei muutettu, ja aiempi luettelo on ennallaan.",
@@ -12163,6 +14590,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Etsittiin kohteesta:",
                 "and_more": "... ja %d muuta",
                 "play_again": "Kokeile ensin vielä kerran ”Pelaa”: juuri asennettua kansiota tarkistetaan joskus vielä. Jos se ei vieläkään onnistu, pelikansion kopiointi on ehkä kesken.",
+                "sound_on": "Ääni: Päällä", "sound_off": "Ääni: Pois",
                 "yes": "Kyllä", "no": "Ei", "cancel": "Peruuta"
             },
             "French": {
@@ -12200,6 +14628,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Déjà dans Steam",
                 "steam_already": "%s est déjà dans votre bibliothèque Steam.",
                 "steam_already_detail": "Rien n'a été modifié. Retirez-le d'abord de Steam si vous voulez l'ajouter à nouveau.",
+                "steam_art_updated": "Ses images ont été mises à jour depuis ce disque.",
                 "steam_failed_title": "Impossible d'ajouter à Steam",
                 "steam_blocked": "La liste des jeux non-Steam de Steam n'a pas pu être mise à jour.",
                 "steam_blocked_detail": "Fermez complètement Steam et réessayez. Rien n'a été modifié et la liste précédente est intacte.",
@@ -12212,6 +14641,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Emplacement recherché :",
                 "and_more": "... et %d de plus",
                 "play_again": "Essayez d'abord « Jouer » une nouvelle fois : un dossier tout juste installé est parfois encore en cours d'analyse. Si l'échec persiste, la copie du dossier du jeu n'est peut-être pas terminée.",
+                "sound_on": "Son : Activé", "sound_off": "Son : Désactivé",
                 "yes": "Oui", "no": "Non", "cancel": "Annuler"
             },
             "German": {
@@ -12249,6 +14679,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Bereits in Steam",
                 "steam_already": "%s ist bereits in deiner Steam-Bibliothek.",
                 "steam_already_detail": "Es wurde nichts geändert. Entferne es zuerst aus Steam, wenn du es erneut hinzufügen möchtest.",
+                "steam_art_updated": "Seine Bilder wurden von dieser Disc aktualisiert.",
                 "steam_failed_title": "Hinzufügen zu Steam fehlgeschlagen",
                 "steam_blocked": "Die Liste der Nicht-Steam-Spiele in Steam konnte nicht aktualisiert werden.",
                 "steam_blocked_detail": "Schließe Steam vollständig und versuche es erneut. Es wurde nichts geändert, die bisherige Liste ist unverändert.",
@@ -12261,6 +14692,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Gesucht in:",
                 "and_more": "... und %d weitere",
                 "play_again": "Versuche es zuerst noch einmal mit „Spielen“: Ein frisch installierter Ordner wird manchmal noch geprüft. Wenn es weiterhin fehlschlägt, wurde der Spielordner vielleicht nicht vollständig kopiert.",
+                "sound_on": "Ton: An", "sound_off": "Ton: Aus",
                 "yes": "Ja", "no": "Nein", "cancel": "Abbrechen"
             },
             "Greek": {
@@ -12298,6 +14730,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Ήδη στο Steam",
                 "steam_already": "%s βρίσκεται ήδη στη βιβλιοθήκη Steam σας.",
                 "steam_already_detail": "Δεν άλλαξε τίποτα. Αφαιρέστε το πρώτα από το Steam αν θέλετε να το προσθέσετε ξανά.",
+                "steam_art_updated": "Οι εικόνες του ενημερώθηκαν από αυτόν τον δίσκο.",
                 "steam_failed_title": "Δεν ήταν δυνατή η προσθήκη στο Steam",
                 "steam_blocked": "Δεν ήταν δυνατή η ενημέρωση της λίστας του Steam με τα παιχνίδια εκτός Steam.",
                 "steam_blocked_detail": "Κλείστε εντελώς το Steam και δοκιμάστε ξανά. Δεν άλλαξε τίποτα και η προηγούμενη λίστα έμεινε ανέπαφη.",
@@ -12310,6 +14743,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Αναζήτηση σε:",
                 "and_more": "... και %d ακόμη",
                 "play_again": "Δοκιμάστε πρώτα ξανά το «Παίξε»: ένας φάκελος που μόλις εγκαταστάθηκε μερικές φορές ελέγχεται ακόμα. Αν συνεχίσει να αποτυγχάνει, ίσως δεν έχει ολοκληρωθεί η αντιγραφή του φακέλου του παιχνιδιού.",
+                "sound_on": "Ήχος: Ενεργός", "sound_off": "Ήχος: Ανενεργός",
                 "yes": "Ναι", "no": "Όχι", "cancel": "Ακύρωση"
             },
             "Hebrew": {
@@ -12347,6 +14781,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "כבר נמצא ב-Steam",
                 "steam_already": "%s כבר בספריית Steam שלך.",
                 "steam_already_detail": "לא שונה דבר. הסר אותו קודם מ-Steam אם ברצונך להוסיף אותו שוב.",
+                "steam_art_updated": "התמונות שלו עודכנו מהתקליטור הזה.",
                 "steam_failed_title": "לא ניתן להוסיף ל-Steam",
                 "steam_blocked": "לא ניתן היה לעדכן את רשימת המשחקים שאינם מ-Steam ב-Steam.",
                 "steam_blocked_detail": "סגור את Steam לגמרי ונסה שוב. לא שונה דבר, והרשימה הקודמת לא נפגעה.",
@@ -12359,6 +14794,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "חיפוש ב:",
                 "and_more": "... ועוד %d",
                 "play_again": "נסה קודם ללחוץ על שחק פעם נוספת: תיקייה שהותקנה זה עתה נסרקת לפעמים עדיין. אם זה ממשיך להיכשל, ייתכן שהעתקת תיקיית המשחק לא הסתיימה.",
+                "sound_on": "קול: מופעל", "sound_off": "קול: כבוי",
                 "yes": "כן", "no": "לא", "cancel": "בטל"
             },
             "Hindi": {
@@ -12396,6 +14832,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "पहले से Steam में है",
                 "steam_already": "%s पहले से आपकी Steam लाइब्रेरी में है।",
                 "steam_already_detail": "कुछ भी नहीं बदला गया। अगर आप इसे फिर से जोड़ना चाहते हैं, तो पहले इसे Steam से हटाएँ।",
+                "steam_art_updated": "इसकी तस्वीरें इस डिस्क से अपडेट कर दी गई हैं।",
                 "steam_failed_title": "Steam में नहीं जोड़ा जा सका",
                 "steam_blocked": "Steam की गैर-Steam गेम्स की सूची अपडेट नहीं की जा सकी।",
                 "steam_blocked_detail": "Steam को पूरी तरह बंद करें और दोबारा कोशिश करें। कुछ भी नहीं बदला गया, और पिछली सूची जस की तस है।",
@@ -12408,6 +14845,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "यहाँ खोजा गया:",
                 "and_more": "... और %d",
                 "play_again": "पहले एक बार और ‘खेल खेलें’ आज़माएँ: नया इंस्टॉल हुआ फ़ोल्डर कभी-कभी अभी भी स्कैन हो रहा होता है। अगर यह बार-बार विफल हो, तो हो सकता है कि गेम फ़ोल्डर की कॉपी पूरी न हुई हो।",
+                "sound_on": "ध्वनि: चालू", "sound_off": "ध्वनि: बंद",
                 "yes": "हाँ", "no": "नहीं", "cancel": "रद्द करें"
             },
             "Hungarian": {
@@ -12445,6 +14883,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Már a Steamben van",
                 "steam_already": "%s már a Steam könyvtáradban van.",
                 "steam_already_detail": "Semmi sem változott. Ha újra hozzá szeretnéd adni, előbb távolítsd el a Steamből.",
+                "steam_art_updated": "A képei frissültek erről a lemezről.",
                 "steam_failed_title": "Nem sikerült hozzáadni a Steamhez",
                 "steam_blocked": "A Steam nem Steames játékokat tartalmazó listáját nem sikerült frissíteni.",
                 "steam_blocked_detail": "Zárd be teljesen a Steamet, és próbáld újra. Semmi sem változott, az előző lista érintetlen.",
@@ -12457,6 +14896,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Keresés helye:",
                 "and_more": "... és még %d",
                 "play_again": "Előbb próbáld meg még egyszer a Játék gombot: egy frissen telepített mappát néha még ellenőriz a rendszer. Ha továbbra sem sikerül, lehet, hogy a játék mappájának másolása nem fejeződött be.",
+                "sound_on": "Hang: Be", "sound_off": "Hang: Ki",
                 "yes": "Igen", "no": "Nem", "cancel": "Mégse"
             },
             "Indonesian": {
@@ -12494,6 +14934,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Sudah ada di Steam",
                 "steam_already": "%s sudah ada di pustaka Steam Anda.",
                 "steam_already_detail": "Tidak ada yang diubah. Hapus dulu dari Steam jika Anda ingin menambahkannya lagi.",
+                "steam_art_updated": "Gambarnya diperbarui dari disk ini.",
                 "steam_failed_title": "Tidak dapat menambahkan ke Steam",
                 "steam_blocked": "Daftar game non-Steam milik Steam tidak dapat diperbarui.",
                 "steam_blocked_detail": "Tutup Steam sepenuhnya, lalu coba lagi. Tidak ada yang diubah, dan daftar sebelumnya tetap utuh.",
@@ -12506,6 +14947,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Mencari di:",
                 "and_more": "... dan %d lainnya",
                 "play_again": "Coba Main Game sekali lagi dulu: folder yang baru dipasang terkadang masih dipindai. Jika terus gagal, mungkin folder game belum selesai disalin.",
+                "sound_on": "Suara: Aktif", "sound_off": "Suara: Nonaktif",
                 "yes": "Ya", "no": "Tidak", "cancel": "Batal"
             },
             "Italian": {
@@ -12543,6 +14985,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Già in Steam",
                 "steam_already": "%s è già nella tua libreria Steam.",
                 "steam_already_detail": "Non è stato modificato nulla. Se vuoi aggiungerlo di nuovo, rimuovilo prima da Steam.",
+                "steam_art_updated": "Le sue immagini sono state aggiornate da questo disco.",
                 "steam_failed_title": "Impossibile aggiungere a Steam",
                 "steam_blocked": "Non è stato possibile aggiornare l'elenco dei giochi non Steam di Steam.",
                 "steam_blocked_detail": "Chiudi completamente Steam e riprova. Non è stato modificato nulla e l'elenco precedente è intatto.",
@@ -12555,6 +14998,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Cercato in:",
                 "and_more": "... e altre %d",
                 "play_again": "Prova prima ancora una volta «Gioca»: una cartella appena installata a volte è ancora in fase di scansione. Se continua a non funzionare, la copia della cartella del gioco potrebbe non essere stata completata.",
+                "sound_on": "Audio: Attivato", "sound_off": "Audio: Disattivato",
                 "yes": "Sì", "no": "No", "cancel": "Annulla"
             },
             "Japanese": {
@@ -12592,6 +15036,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "すでにSteamにあります",
                 "steam_already": "%s はすでにSteamライブラリにあります。",
                 "steam_already_detail": "何も変更していません。もう一度追加する場合は、先にSteamから削除してください。",
+                "steam_art_updated": "このディスクの画像に更新しました。",
                 "steam_failed_title": "Steamに追加できませんでした",
                 "steam_blocked": "Steamの非Steamゲーム一覧を更新できませんでした。",
                 "steam_blocked_detail": "Steamを完全に終了してから、もう一度お試しください。何も変更しておらず、以前の一覧はそのままです。",
@@ -12604,6 +15049,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "検索場所:",
                 "and_more": "…ほか %d 件",
                 "play_again": "まずもう一度「ゲームを開始」をお試しください。インストールしたばかりのフォルダーは、まだスキャン中のことがあります。それでも失敗する場合は、ゲームフォルダーのコピーが完了していない可能性があります。",
+                "sound_on": "サウンド：オン", "sound_off": "サウンド：オフ",
                 "yes": "はい", "no": "いいえ", "cancel": "キャンセル"
             },
             "Korean": {
@@ -12641,6 +15087,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "이미 Steam에 있음",
                 "steam_already": "%s 게임은 이미 Steam 라이브러리에 있습니다.",
                 "steam_already_detail": "아무것도 변경하지 않았습니다. 다시 추가하려면 먼저 Steam에서 제거하세요.",
+                "steam_art_updated": "이 디스크의 이미지로 업데이트했습니다.",
                 "steam_failed_title": "Steam에 추가할 수 없음",
                 "steam_blocked": "Steam의 비 Steam 게임 목록을 업데이트할 수 없습니다.",
                 "steam_blocked_detail": "Steam을 완전히 종료한 다음 다시 시도하세요. 아무것도 변경하지 않았으며 이전 목록은 그대로입니다.",
@@ -12653,6 +15100,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "검색한 위치:",
                 "and_more": "... 외 %d개",
                 "play_again": "먼저 ‘게임 시작’을 한 번 더 눌러 보세요. 방금 설치한 폴더는 아직 검사 중일 때가 있습니다. 계속 실패하면 게임 폴더 복사가 끝나지 않았을 수 있습니다.",
+                "sound_on": "소리: 켜짐", "sound_off": "소리: 꺼짐",
                 "yes": "예", "no": "아니요", "cancel": "취소"
             },
             "Norwegian": {
@@ -12690,6 +15138,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Allerede i Steam",
                 "steam_already": "%s ligger allerede i Steam-biblioteket ditt.",
                 "steam_already_detail": "Ingenting ble endret. Fjern det fra Steam først hvis du vil legge det til på nytt.",
+                "steam_art_updated": "Bildene til spillet er oppdatert fra denne platen.",
                 "steam_failed_title": "Kunne ikke legge til i Steam",
                 "steam_blocked": "Steams liste over ikke-Steam-spill kunne ikke oppdateres.",
                 "steam_blocked_detail": "Lukk Steam helt, og prøv på nytt. Ingenting ble endret, og den forrige listen er urørt.",
@@ -12702,6 +15151,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Så i:",
                 "and_more": "... og %d til",
                 "play_again": "Prøv «Spill» én gang til først: En nyinstallert mappe blir noen ganger fortsatt skannet. Hvis det fortsetter å mislykkes, er kanskje ikke spillmappen ferdig kopiert.",
+                "sound_on": "Lyd: På", "sound_off": "Lyd: Av",
                 "yes": "Ja", "no": "Nei", "cancel": "Avbryt"
             },
             "Polish": {
@@ -12739,6 +15189,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Już jest w Steam",
                 "steam_already": "%s jest już w twojej bibliotece Steam.",
                 "steam_already_detail": "Nic nie zostało zmienione. Jeśli chcesz dodać grę ponownie, najpierw usuń ją ze Steam.",
+                "steam_art_updated": "Jej obrazy zostały zaktualizowane z tej płyty.",
                 "steam_failed_title": "Nie udało się dodać do Steam",
                 "steam_blocked": "Nie udało się zaktualizować listy gier spoza Steam w Steam.",
                 "steam_blocked_detail": "Całkowicie zamknij Steam i spróbuj ponownie. Nic nie zostało zmienione, a poprzednia lista jest nienaruszona.",
@@ -12751,6 +15202,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Szukano w:",
                 "and_more": "... i %d więcej",
                 "play_again": "Najpierw spróbuj jeszcze raz „Graj”: świeżo zainstalowany folder jest czasem jeszcze skanowany. Jeśli nadal się nie udaje, kopiowanie folderu gry mogło się nie zakończyć.",
+                "sound_on": "Dźwięk: Wł.", "sound_off": "Dźwięk: Wył.",
                 "yes": "Tak", "no": "Nie", "cancel": "Anuluj"
             },
             "Portuguese": {
@@ -12788,6 +15240,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Já está no Steam",
                 "steam_already": "%s já está na sua biblioteca Steam.",
                 "steam_already_detail": "Não foi alterado nada. Remova-o primeiro do Steam se quiser adicioná-lo novamente.",
+                "steam_art_updated": "As suas imagens foram atualizadas a partir deste disco.",
                 "steam_failed_title": "Não foi possível adicionar ao Steam",
                 "steam_blocked": "Não foi possível atualizar a lista de jogos não Steam do Steam.",
                 "steam_blocked_detail": "Feche completamente o Steam e tente novamente. Não foi alterado nada e a lista anterior está intacta.",
@@ -12800,6 +15253,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Procurado em:",
                 "and_more": "... e mais %d",
                 "play_again": "Experimente primeiro «Jogar» mais uma vez: uma pasta acabada de instalar por vezes ainda está a ser analisada. Se continuar a falhar, a cópia da pasta do jogo pode não ter terminado.",
+                "sound_on": "Som: Ligado", "sound_off": "Som: Desligado",
                 "yes": "Sim", "no": "Não", "cancel": "Cancelar"
             },
             "Portuguese (Brazil)": {
@@ -12837,6 +15291,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Já está na Steam",
                 "steam_already": "%s já está na sua biblioteca Steam.",
                 "steam_already_detail": "Nada foi alterado. Remova o jogo da Steam primeiro se quiser adicioná-lo de novo.",
+                "steam_art_updated": "As imagens do jogo foram atualizadas a partir deste disco.",
                 "steam_failed_title": "Não foi possível adicionar à Steam",
                 "steam_blocked": "Não foi possível atualizar a lista de jogos não Steam da Steam.",
                 "steam_blocked_detail": "Feche a Steam completamente e tente de novo. Nada foi alterado, e a lista anterior continua intacta.",
@@ -12849,6 +15304,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Procurado em:",
                 "and_more": "... e mais %d",
                 "play_again": "Tente clicar em Jogar mais uma vez primeiro: uma pasta recém-instalada às vezes ainda está sendo verificada. Se continuar falhando, talvez a cópia da pasta do jogo não tenha terminado.",
+                "sound_on": "Som: Ligado", "sound_off": "Som: Desligado",
                 "yes": "Sim", "no": "Não", "cancel": "Cancelar"
             },
             "Romanian": {
@@ -12886,6 +15342,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Deja în Steam",
                 "steam_already": "%s se află deja în biblioteca ta Steam.",
                 "steam_already_detail": "Nu s-a modificat nimic. Elimină-l mai întâi din Steam dacă vrei să-l adaugi din nou.",
+                "steam_art_updated": "Imaginile sale au fost actualizate de pe acest disc.",
                 "steam_failed_title": "Nu s-a putut adăuga în Steam",
                 "steam_blocked": "Lista de jocuri non-Steam din Steam nu a putut fi actualizată.",
                 "steam_blocked_detail": "Închide complet Steam și încearcă din nou. Nu s-a modificat nimic, iar lista anterioară a rămas neatinsă.",
@@ -12898,6 +15355,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "S-a căutat în:",
                 "and_more": "... și încă %d",
                 "play_again": "Încearcă mai întâi încă o dată „Joacă”: un folder abia instalat este uneori încă scanat. Dacă eșuează în continuare, este posibil ca folderul jocului să nu se fi copiat complet.",
+                "sound_on": "Sunet: Pornit", "sound_off": "Sunet: Oprit",
                 "yes": "Da", "no": "Nu", "cancel": "Anulează"
             },
             "Russian": {
@@ -12935,6 +15393,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Уже в Steam",
                 "steam_already": "%s уже есть в вашей библиотеке Steam.",
                 "steam_already_detail": "Ничего не изменено. Если хотите добавить игру заново, сначала удалите её из Steam.",
+                "steam_art_updated": "Её изображения обновлены с этого диска.",
                 "steam_failed_title": "Не удалось добавить в Steam",
                 "steam_blocked": "Не удалось обновить список сторонних игр в Steam.",
                 "steam_blocked_detail": "Полностью закройте Steam и повторите попытку. Ничего не изменено, прежний список не тронут.",
@@ -12947,6 +15406,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Где искали:",
                 "and_more": "... и ещё %d",
                 "play_again": "Сначала попробуйте нажать «Играть» ещё раз: только что установленная папка иногда ещё проверяется. Если ошибка повторяется, возможно, папка игры скопировалась не полностью.",
+                "sound_on": "Звук: Вкл.", "sound_off": "Звук: Выкл.",
                 "yes": "Да", "no": "Нет", "cancel": "Отмена"
             },
             "Serbian": {
@@ -12984,6 +15444,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Već je u Steamu",
                 "steam_already": "%s se već nalazi u vašoj Steam biblioteci.",
                 "steam_already_detail": "Ništa nije promenjeno. Ako želite da je ponovo dodate, prvo je uklonite iz Steama.",
+                "steam_art_updated": "Njene slike su ažurirane sa ovog diska.",
                 "steam_failed_title": "Dodavanje u Steam nije uspelo",
                 "steam_blocked": "Steam lista igara van Steama nije mogla da se ažurira.",
                 "steam_blocked_detail": "Potpuno zatvorite Steam i pokušajte ponovo. Ništa nije promenjeno, a prethodna lista je ostala netaknuta.",
@@ -12996,6 +15457,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Traženo u:",
                 "and_more": "... i još %d",
                 "play_again": "Prvo još jednom pokušajte „Igraj”: tek instalirana fascikla se ponekad još skenira. Ako i dalje ne uspeva, kopiranje fascikle igre možda nije završeno.",
+                "sound_on": "Zvuk: Uključen", "sound_off": "Zvuk: Isključen",
                 "yes": "Da", "no": "Ne", "cancel": "Otkaži"
             },
             "Slovak": {
@@ -13033,6 +15495,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Už je v Steame",
                 "steam_already": "%s už je vo vašej knižnici Steam.",
                 "steam_already_detail": "Nič sa nezmenilo. Ak ju chcete pridať znova, najprv ju zo Steamu odstráňte.",
+                "steam_art_updated": "Jej obrázky boli aktualizované z tohto disku.",
                 "steam_failed_title": "Pridanie do Steamu zlyhalo",
                 "steam_blocked": "Zoznam hier mimo Steamu sa v Steame nepodarilo aktualizovať.",
                 "steam_blocked_detail": "Steam úplne zatvorte a skúste to znova. Nič sa nezmenilo a predchádzajúci zoznam zostal nedotknutý.",
@@ -13045,6 +15508,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Hľadané v:",
                 "and_more": "... a ďalších %d",
                 "play_again": "Najprv skúste ešte raz „Hrať“: čerstvo nainštalovaný priečinok sa niekedy ešte kontroluje. Ak to stále zlyháva, kopírovanie priečinka hry možno nebolo dokončené.",
+                "sound_on": "Zvuk: Zapnutý", "sound_off": "Zvuk: Vypnutý",
                 "yes": "Áno", "no": "Nie", "cancel": "Zrušiť"
             },
             "Spanish": {
@@ -13082,6 +15546,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Ya está en Steam",
                 "steam_already": "%s ya está en tu biblioteca de Steam.",
                 "steam_already_detail": "No se ha cambiado nada. Si quieres volver a añadirlo, quítalo primero de Steam.",
+                "steam_art_updated": "Sus imágenes se han actualizado desde este disco.",
                 "steam_failed_title": "No se pudo añadir a Steam",
                 "steam_blocked": "No se pudo actualizar la lista de juegos ajenos a Steam de Steam.",
                 "steam_blocked_detail": "Cierra Steam por completo y vuelve a intentarlo. No se ha cambiado nada y la lista anterior sigue intacta.",
@@ -13094,6 +15559,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Se buscó en:",
                 "and_more": "... y %d más",
                 "play_again": "Prueba primero «Jugar» una vez más: a veces una carpeta recién instalada todavía se está analizando. Si sigue fallando, puede que la carpeta del juego no haya terminado de copiarse.",
+                "sound_on": "Sonido: Activado", "sound_off": "Sonido: Desactivado",
                 "yes": "Sí", "no": "No", "cancel": "Cancelar"
             },
             "Swedish": {
@@ -13131,6 +15597,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Redan i Steam",
                 "steam_already": "%s finns redan i ditt Steam-bibliotek.",
                 "steam_already_detail": "Inget ändrades. Ta bort det från Steam först om du vill lägga till det igen.",
+                "steam_art_updated": "Dess bilder har uppdaterats från den här skivan.",
                 "steam_failed_title": "Kunde inte lägga till i Steam",
                 "steam_blocked": "Steams lista över icke-Steam-spel kunde inte uppdateras.",
                 "steam_blocked_detail": "Stäng Steam helt och försök igen. Inget ändrades, och den tidigare listan är orörd.",
@@ -13143,6 +15610,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Letade i:",
                 "and_more": "... och %d till",
                 "play_again": "Prova ”Spela” en gång till först: en nyinstallerad mapp skannas ibland fortfarande. Om det fortsätter att misslyckas kanske spelmappen inte har kopierats klart.",
+                "sound_on": "Ljud: På", "sound_off": "Ljud: Av",
                 "yes": "Ja", "no": "Nej", "cancel": "Avbryt"
             },
             "Thai": {
@@ -13180,6 +15648,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "มีอยู่ใน Steam แล้ว",
                 "steam_already": "%s อยู่ในคลัง Steam ของคุณอยู่แล้ว",
                 "steam_already_detail": "ไม่มีการเปลี่ยนแปลงใด ๆ หากต้องการเพิ่มอีกครั้ง ให้ลบออกจาก Steam ก่อน",
+                "steam_art_updated": "อัปเดตรูปภาพของเกมจากแผ่นนี้แล้ว",
                 "steam_failed_title": "ไม่สามารถเพิ่มลงใน Steam",
                 "steam_blocked": "ไม่สามารถอัปเดตรายการเกมที่ไม่ใช่ของ Steam ใน Steam ได้",
                 "steam_blocked_detail": "ปิด Steam ให้หมดแล้วลองอีกครั้ง ไม่มีการเปลี่ยนแปลงใด ๆ และรายการเดิมยังอยู่ครบ",
@@ -13192,6 +15661,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "ตำแหน่งที่ค้นหา:",
                 "and_more": "... และอีก %d รายการ",
                 "play_again": "ลองกด เล่นเกม อีกครั้งก่อน เพราะโฟลเดอร์ที่เพิ่งติดตั้งบางครั้งยังถูกสแกนอยู่ หากยังล้มเหลวอยู่ อาจเป็นเพราะการคัดลอกโฟลเดอร์เกมยังไม่เสร็จ",
+                "sound_on": "เสียง: เปิด", "sound_off": "เสียง: ปิด",
                 "yes": "ใช่", "no": "ไม่", "cancel": "ยกเลิก"
             },
             "Turkish": {
@@ -13229,6 +15699,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Zaten Steam'de",
                 "steam_already": "%s zaten Steam kitaplığınızda.",
                 "steam_already_detail": "Hiçbir şey değiştirilmedi. Yeniden eklemek istiyorsanız önce Steam'den kaldırın.",
+                "steam_art_updated": "Görselleri bu diskten güncellendi.",
                 "steam_failed_title": "Steam'e Eklenemedi",
                 "steam_blocked": "Steam'in Steam dışı oyunlar listesi güncellenemedi.",
                 "steam_blocked_detail": "Steam'i tamamen kapatıp tekrar deneyin. Hiçbir şey değiştirilmedi ve önceki liste olduğu gibi duruyor.",
@@ -13241,6 +15712,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Aranan konum:",
                 "and_more": "... ve %d tane daha",
                 "play_again": "Önce Oyunu Oyna'yı bir kez daha deneyin: yeni kurulmuş bir klasör bazen hâlâ taranıyor olabilir. Hata sürerse oyun klasörünün kopyalanması tamamlanmamış olabilir.",
+                "sound_on": "Ses: Açık", "sound_off": "Ses: Kapalı",
                 "yes": "Evet", "no": "Hayır", "cancel": "İptal"
             },
             "Ukrainian": {
@@ -13278,6 +15750,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Уже в Steam",
                 "steam_already": "%s уже є у вашій бібліотеці Steam.",
                 "steam_already_detail": "Нічого не змінено. Якщо хочете додати гру знову, спочатку видаліть її зі Steam.",
+                "steam_art_updated": "Її зображення оновлено з цього диска.",
                 "steam_failed_title": "Не вдалося додати до Steam",
                 "steam_blocked": "Не вдалося оновити список сторонніх ігор у Steam.",
                 "steam_blocked_detail": "Повністю закрийте Steam і спробуйте ще раз. Нічого не змінено, попередній список не зачеплено.",
@@ -13290,6 +15763,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Де шукали:",
                 "and_more": "... і ще %d",
                 "play_again": "Спочатку спробуйте ще раз натиснути «Грати»: щойно встановлену теку іноді ще перевіряють. Якщо помилка повторюється, можливо, теку гри скопійовано не повністю.",
+                "sound_on": "Звук: Увімк.", "sound_off": "Звук: Вимк.",
                 "yes": "Так", "no": "Ні", "cancel": "Скасувати"
             },
             "Vietnamese": {
@@ -13327,6 +15801,7 @@ class GameMenu(QtWidgets.QWidget):
                 "steam_already_title": "Đã có trong Steam",
                 "steam_already": "%s đã có sẵn trong thư viện Steam của bạn.",
                 "steam_already_detail": "Không có gì thay đổi. Hãy gỡ trò chơi khỏi Steam trước nếu bạn muốn thêm lại.",
+                "steam_art_updated": "Hình ảnh của trò chơi đã được cập nhật từ đĩa này.",
                 "steam_failed_title": "Không thể thêm vào Steam",
                 "steam_blocked": "Không thể cập nhật danh sách trò chơi không thuộc Steam của Steam.",
                 "steam_blocked_detail": "Hãy đóng hẳn Steam rồi thử lại. Không có gì thay đổi và danh sách trước đó vẫn nguyên vẹn.",
@@ -13339,6 +15814,7 @@ class GameMenu(QtWidgets.QWidget):
                 "looked_in": "Đã tìm trong:",
                 "and_more": "... và %d mục khác",
                 "play_again": "Hãy thử nhấn Chơi Game thêm một lần trước: thư mục vừa cài đặt đôi khi vẫn đang được quét. Nếu vẫn tiếp tục lỗi, có thể thư mục trò chơi chưa sao chép xong.",
+                "sound_on": "Âm thanh: Bật", "sound_off": "Âm thanh: Tắt",
                 "yes": "Có", "no": "Không", "cancel": "Hủy"
             }
         }
@@ -13437,11 +15913,27 @@ class GameMenu(QtWidgets.QWidget):
                 self.background.setPixmap(pixmap)
                 self.background.setGeometry(0, 0, scaled_width, scaled_height)
         
+        # A background that carries its own title (1.5.2, his word of 21 Oct
+        # 2026): the developer drew the game's name into the picture, so the menu
+        # lays nothing over it. No dark shading, no title, and the buttons sit at
+        # the foot of the column, leaving the top of the picture to the art.
+        self.own_art = bool(self.menu_config.get("background_has_title"))
+        # The disc's own look, when it has one (1.5.2): a font and
+        # three colours from menu_config.json. Set after the menu's own rules so
+        # it wins, in the face's one weight rather than a smeared synthetic bold.
+        self.theme = self._menu_theme()
+        self.font_rule = ('font-family: "%s"; font-weight: normal;' % self.theme["family"]
+                          if self.theme["family"] else "")
+
+        # The letters' soft dark edge, under the menu column and over the picture.
+        self.letter_edges = LetterEdges(self.bg_widget, int(14 * self.scale_factor)) if self.own_art else None
+
         # Add dark overlay for better text contrast (more subtle)
-        overlay = QtWidgets.QWidget(self.bg_widget)
-        overlay.setGeometry(0, 0, scaled_width, scaled_height)
-        overlay.setStyleSheet("background-color: rgba(0, 0, 0, 30);")
-        
+        if not self.own_art:
+            overlay = QtWidgets.QWidget(self.bg_widget)
+            overlay.setGeometry(0, 0, scaled_width, scaled_height)
+            overlay.setStyleSheet("background-color: rgba(0, 0, 0, 30);")
+
         # Main container for UI elements
         ui_container = QtWidgets.QWidget(self.bg_widget)
         ui_container.setGeometry(0, 0, scaled_width, scaled_height)
@@ -13454,13 +15946,14 @@ class GameMenu(QtWidgets.QWidget):
         # Left side - Menu buttons (neutral color scheme)
         left_panel = QtWidgets.QWidget()
         left_panel.setFixedWidth(int(480 * self.scale_factor))
-        left_panel.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+        panel_fill = "transparent" if self.own_art else """qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
                     stop: 0 rgba(15, 15, 15, 220),
                     stop: 0.6 rgba(20, 20, 20, 200),
                     stop: 0.8 rgba(20, 20, 20, 140),
-                    stop: 1 rgba(20, 20, 20, 0));
+                    stop: 1 rgba(20, 20, 20, 0))"""
+        left_panel.setStyleSheet("""
+            QWidget {
+                background: """ + panel_fill + """;
                 border: none;
                 margin: 0px;
                 padding: 0px;
@@ -13477,8 +15970,10 @@ class GameMenu(QtWidgets.QWidget):
         
         # Look for game logo in current directory first (most up-to-date)
         potential_paths = []
-        
-        if getattr(sys, 'frozen', False):
+
+        if self.own_art:
+            pass  # the art carries the title: no logo, and no text title either
+        elif getattr(sys, 'frozen', False):
             # Running as compiled exe - check exe directory first
             exe_dir = os.path.dirname(sys.executable)
             potential_paths = [
@@ -13545,36 +16040,46 @@ class GameMenu(QtWidgets.QWidget):
                 title_label = QtWidgets.QLabel(self.menu_title.upper())
                 title_label.setTextFormat(QtCore.Qt.PlainText)
                 title_label.setStyleSheet("""
-                    color: white;
+                    color: """ + (self.theme["text"] or "white") + """;
                     font-size: """ + str(int(36 * self.scale_factor)) + """px;
                     font-weight: bold;
                     letter-spacing: """ + str(int(3 * self.scale_factor)) + """px;
                     margin-bottom: """ + str(int(20 * self.scale_factor)) + """px;
                     background: transparent;
+                    """ + self.font_rule + """
                 """)
                 title_label.setWordWrap(True)
                 self._keep_title_whole(title_label)
                 left_layout.addWidget(title_label)
-        else:
+        elif not self.own_art:
             # No logo found, use text
             title_label = QtWidgets.QLabel(self.menu_title.upper())
             title_label.setTextFormat(QtCore.Qt.PlainText)
             title_label.setStyleSheet("""
-                color: white;
+                color: """ + (self.theme["text"] or "white") + """;
                 font-size: """ + str(int(36 * self.scale_factor)) + """px;
                 font-weight: bold;
                 letter-spacing: """ + str(int(3 * self.scale_factor)) + """px;
                 margin-bottom: """ + str(int(20 * self.scale_factor)) + """px;
                 background: transparent;
+                """ + self.font_rule + """
             """)
             title_label.setWordWrap(True)
             self._keep_title_whole(title_label)
             left_layout.addWidget(title_label)
         
-        # Add some spacing
-        left_layout.addSpacing(int(40 * self.scale_factor))
-        
+        # Add some spacing. With the art's own title the room goes above the
+        # buttons instead, so they sit at the foot of the column.
+        if self.own_art:
+            room = max(0, int((self.theme["top"] - 50) * self.scale_factor))
+            left_layout.addItem(QtWidgets.QSpacerItem(
+                0, room, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.MinimumExpanding))
+        else:
+            left_layout.addSpacing(int(40 * self.scale_factor))
+
         # Menu buttons - Neutral white/gray color scheme
+        row_pad = 11 if self.own_art else 15
+        row_margin = 3 if self.own_art else 5
         button_style_template = """
             QPushButton {{
                 background-color: transparent;
@@ -13582,15 +16087,16 @@ class GameMenu(QtWidgets.QWidget):
                 border: none;
                 border-left: {border_width}px solid {border_color};
                 text-align: left;
-                padding: """ + str(int(15 * self.scale_factor)) + """px 0px """ + str(int(15 * self.scale_factor)) + """px """ + str(int(20 * self.scale_factor)) + """px;
-                font-size: """ + str(int(22 * self.scale_factor)) + """px;
+                padding: """ + str(int(row_pad * self.scale_factor)) + """px 0px """ + str(int(row_pad * self.scale_factor)) + """px """ + str(int(20 * self.scale_factor)) + """px;
+                font-size: """ + str(int(22 * self.scale_factor * self.theme["scale"])) + """px;
                 font-weight: bold;
                 letter-spacing: """ + str(int(2 * self.scale_factor)) + """px;
-                margin: """ + str(int(5 * self.scale_factor)) + """px 0px;
+                margin: """ + str(int(row_margin * self.scale_factor)) + """px 0px;
+                """ + self.font_rule + """
             }}
             QPushButton:hover, QPushButton:focus {{
-                color: white;
-                border-left: """ + str(int(4 * self.scale_factor)) + """px solid #ffffff;
+                color: """ + (self.theme["accent"] or "white") + """;
+                border-left: """ + str(int(4 * self.scale_factor)) + """px solid """ + (self.theme["accent"] or "#ffffff") + """;
                 background-color: rgba(255, 255, 255, 10);
                 padding-left: """ + str(int(30 * self.scale_factor)) + """px;
             }}
@@ -13614,7 +16120,8 @@ class GameMenu(QtWidgets.QWidget):
             self.play_btn.setToolTip(trans["tip_install"])
         self.play_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.play_btn.setStyleSheet(button_style_template.format(
-            color="#ffffff", border_width="3", border_color="#ffffff"
+            color=self.theme["text"] or "#ffffff", border_width="3",
+            border_color=self.theme["accent"] or "#ffffff"
         ))
         
         # Compatibility mode: a quieter line tucked under PLAY, not a second
@@ -13623,21 +16130,24 @@ class GameMenu(QtWidgets.QWidget):
         # smaller, dimmer, indented, and close enough to PLAY to belong to it.
         # Only appears when the author configured arguments that survive
         # checking; a game with no such mode never shows it.
+        # The quiet lines are dimmed against the shading; on bare art they need more light.
+        self.quiet_colour = self.theme["quiet"] or ("#c8c8c8" if self.own_art else "#888888")
         compat_style = """
             QPushButton {
                 background-color: transparent;
-                color: #888888;
+                color: """ + self.quiet_colour + """;
                 border: none;
                 border-left: 3px solid transparent;
                 text-align: left;
                 padding: """ + str(int(2 * self.scale_factor)) + """px 0px """ + str(int(6 * self.scale_factor)) + """px """ + str(int(34 * self.scale_factor)) + """px;
-                font-size: """ + str(int(14 * self.scale_factor)) + """px;
+                font-size: """ + str(int(14 * self.scale_factor * self.theme["scale"])) + """px;
                 font-weight: normal;
                 letter-spacing: """ + str(int(1 * self.scale_factor)) + """px;
-                margin: 0px 0px """ + str(int(10 * self.scale_factor)) + """px 0px;
+                margin: 0px 0px """ + str(int((6 if self.own_art else 10) * self.scale_factor)) + """px 0px;
+                """ + self.font_rule + """
             }
             QPushButton:hover, QPushButton:focus {
-                color: #ffffff;
+                color: """ + (self.theme["accent"] or "#ffffff") + """;
                 padding-left: """ + str(int(40 * self.scale_factor)) + """px;
             }
             QPushButton:pressed {
@@ -13672,6 +16182,8 @@ class GameMenu(QtWidgets.QWidget):
         self.quick_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.quick_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.quick_scroll.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        if self.letter_edges is not None:  # the lines' edges move with the list
+            self.quick_scroll.verticalScrollBar().valueChanged.connect(self.letter_edges.update)
         self.quick_scroll.setStyleSheet("""
             QWidget { background: transparent; border: none; }
             QScrollBar:vertical { background: transparent; width: """ + str(int(6 * self.scale_factor)) + """px; margin: 0px; }
@@ -13699,7 +16211,7 @@ class GameMenu(QtWidgets.QWidget):
             self.bonus_btn.setCursor(QtCore.Qt.PointingHandCursor)
             self.bonus_btn.setToolTip(self.translations[self.current_lang]["tip_bonus"])
             self.bonus_btn.setStyleSheet(button_style_template.format(
-                color="#dddddd", border_width="2", border_color="transparent"
+                color=self.theme["text"] or "#dddddd", border_width="2", border_color="transparent"
             ))
 
         # MODS: shown when a mod tool is actually there to run. It used to be
@@ -13733,14 +16245,14 @@ class GameMenu(QtWidgets.QWidget):
         # a player actually wants to know before clicking it.
         self.uninstall_btn.setToolTip(self.translations[self.current_lang]["tip_uninstall"])
         self.uninstall_btn.setStyleSheet(button_style_template.format(
-            color="#cccccc", border_width="3", border_color="transparent"
+            color=self.theme["text"] or "#cccccc", border_width="3", border_color="transparent"
         ))
         
         self.exit_btn = QtWidgets.QPushButton(self.shout(trans["exit"]))
         self.exit_btn.clicked.connect(self.close)
         self.exit_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.exit_btn.setStyleSheet(button_style_template.format(
-            color="#cccccc", border_width="3", border_color="transparent"
+            color=self.theme["text"] or "#cccccc", border_width="3", border_color="transparent"
         ))
         
         # Add buttons to layout conditionally
@@ -13761,12 +16273,17 @@ class GameMenu(QtWidgets.QWidget):
         
         for btn in buttons_to_add:
             left_layout.addWidget(btn)
+            if btn is not self.quick_scroll:
+                self._shade_text(btn)
         self.refresh_quick_starts()  # after quick_scroll has its place, never as a window of its own
         for btn in self.nav_buttons():
             btn.installEventFilter(self)  # Up and Down follow the screen; see eventFilter
-        
-        left_layout.addStretch()
-        
+
+        if self.own_art:
+            left_layout.addSpacing(int(20 * self.scale_factor))
+        else:
+            left_layout.addStretch()
+
         # Language selector at bottom
         lang_container = QtWidgets.QWidget()
         lang_container.setStyleSheet("background: transparent;")
@@ -13775,14 +16292,15 @@ class GameMenu(QtWidgets.QWidget):
         
         self.lang_label = QtWidgets.QLabel("Menu Language:")
         self.lang_label.setStyleSheet("""
-            color: #888888;
+            color: """ + self.quiet_colour + """;
             font-size: """ + str(int(11 * self.scale_factor)) + """px;
             font-weight: bold;
             letter-spacing: """ + str(int(2 * self.scale_factor)) + """px;
             background: transparent;
+            """ + self.font_rule + """
         """)
         
-        self.lang_combo = QtWidgets.QComboBox()
+        self.lang_combo = ArrowComboBox(self.scale_factor)
         self.lang_combo.addItems(sorted(list(self.translations.keys())))
         self.lang_combo.setCurrentText(self.current_lang)
         self.lang_combo.currentTextChanged.connect(self.change_language)
@@ -13804,10 +16322,9 @@ class GameMenu(QtWidgets.QWidget):
             }
             QComboBox::down-arrow {
                 image: none;
-                border-left: """ + str(int(4 * self.scale_factor)) + """px solid transparent;
-                border-right: """ + str(int(4 * self.scale_factor)) + """px solid transparent;
-                border-top: """ + str(int(5 * self.scale_factor)) + """px solid #ffffff;
-                margin-right: """ + str(int(10 * self.scale_factor)) + """px;
+                width: 0px;
+                height: 0px;
+                border: none;
             }
             QComboBox:hover {
                 background-color: rgba(60, 60, 60, 200);
@@ -13831,6 +16348,7 @@ class GameMenu(QtWidgets.QWidget):
             }
         """)
         
+        self._shade_text(self.lang_label)
         lang_layout.addWidget(self.lang_label)
         lang_layout.addWidget(self.lang_combo)
         lang_layout.addStretch()
@@ -13870,7 +16388,10 @@ class GameMenu(QtWidgets.QWidget):
                 background-color: rgba(255, 255, 255, 40);
             }
         """)
-        
+
+        # The Menu Music and its Sound button beside the close button, on a disc with music (1.5.2)
+        self.init_menu_music(ui_container)
+
         # Add company logo in bottom-right
         company_logo_path = None
         if getattr(sys, 'frozen', False):
@@ -13974,7 +16495,7 @@ class GameMenu(QtWidgets.QWidget):
                 # label can make the signed menu fetch a file (security review).
                 copyright_label.setTextFormat(QtCore.Qt.PlainText)
                 copyright_label.setStyleSheet("""
-                    color: #666666;
+                    color: """ + ("#bdbdbd" if self.own_art else "#666666") + """;
                     font-size: """ + str(int(10 * self.scale_factor)) + """px;
                     background: transparent;
                     letter-spacing: """ + str(int(1 * self.scale_factor)) + """px;
@@ -13983,12 +16504,113 @@ class GameMenu(QtWidgets.QWidget):
                 copyright_label.setAlignment(QtCore.Qt.AlignLeft)
                 # Position at bottom-left UNDER language selector (aligned with menu buttons)
                 copyright_label.setGeometry(int(60 * self.scale_factor), int(650 * self.scale_factor), int(320 * self.scale_factor), int(40 * self.scale_factor))
+                self._shade_text(copyright_label)
         except Exception:
             pass
             
+        self._fit_labels()
+
         # Initialize controller support
         self.init_controller_support()
     
+    def _menu_theme(self):
+        """The disc's own font and colours from menu_config.json (1.5.2).
+
+        {"theme": {"font": "menu_font.ttf", "text": "#rrggbb", "accent": "#rrggbb",
+        "quiet": "#rrggbb"}}: the words, the focus look, the quiet lines. Anything
+        missing or not as expected is left at the menu's own: white words in
+        Windows' font. menu_config.json can be rewritten, so a colour must be six
+        hex digits, the font a .ttf or .otf file inside the menu's own folder, and
+        the family name it carries plain letters, digits, spaces and hyphens
+        before it goes into a style sheet.
+        """
+        theme = {"text": "", "accent": "", "quiet": "", "family": "", "scale": 1.0, "top": 0}
+        raw = self.menu_config.get("theme")
+        if not isinstance(raw, dict):
+            return theme
+        # "scale": the words' size against the menu's own (a display face can run
+        # small); "top": the highest the buttons may reach, in pixels of the
+        # 1280x720 menu, so they never climb onto the art's own title.
+        scale = raw.get("scale")
+        if isinstance(scale, (int, float)) and not isinstance(scale, bool) and 0.8 <= scale <= 1.5:
+            theme["scale"] = float(scale)
+        top = raw.get("top")
+        if isinstance(top, int) and not isinstance(top, bool) and 0 <= top <= 500:
+            theme["top"] = top
+        hexdigits = "0123456789abcdefABCDEF"
+        for key in ("text", "accent", "quiet"):
+            value = raw.get(key)
+            if (isinstance(value, str) and len(value) == 7 and value[0] == "#"
+                    and all(ch in hexdigits for ch in value[1:])):
+                theme[key] = value
+        name = raw.get("font")
+        if (isinstance(name, str) and name and name == os.path.basename(name)
+                and os.path.splitext(name)[1].lower() in (".ttf", ".otf")):
+            path = os.path.join(menu_dir(), name)
+            if os.path.isfile(path):
+                try:
+                    font_id = QtGui.QFontDatabase.addApplicationFont(path)
+                    families = QtGui.QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+                except Exception:
+                    families = []
+                family = families[0] if families else ""
+                if family and len(family) <= 64 and all(ch.isalnum() or ch in " -" for ch in family):
+                    theme["family"] = family
+        return theme
+
+    def _fit_labels(self):
+        """Step a button's type down until its label fits the column, in any language (1.5.2).
+
+        A disc's own font, or its larger size, can make a translated label (BONUS
+        in Polish, say) wider than the column, and the layout would cut it off.
+        Only a label that does not fit, with room for the hover indent, gets
+        smaller, never below 70% of its size, and every language starts again
+        from the full size. A disc without its own font or size is left exactly
+        as it always was.
+        """
+        if not (self.theme["family"] or self.theme["scale"] != 1.0):
+            return
+        room = int(390 * self.scale_factor) - int(15 * self.scale_factor)
+        for name in ("play_btn", "compat_btn", "mods_btn", "steam_btn", "bonus_btn", "uninstall_btn", "exit_btn"):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            sheet = getattr(btn, "_rialto_full_sheet", None)
+            if sheet is None:
+                sheet = btn._rialto_full_sheet = btn.styleSheet()
+            marker = sheet.find("font-size: ")
+            if marker < 0:
+                continue
+            end = sheet.find("px", marker)
+            try:
+                full = int(sheet[marker + len("font-size: "):end])
+            except ValueError:
+                continue
+            size, floor = full, max(1, int(full * 0.7))
+            btn.setStyleSheet(sheet)
+            btn.ensurePolished()
+            # A focused or hovered button is measured already indented (and its bar a
+            # pixel wider), and the room keeps that indent back too: allow for it once.
+            limit = room
+            if btn.hasFocus() or btn.underMouse():
+                limit += int(30 * self.scale_factor) - int(20 * self.scale_factor) + int(4 * self.scale_factor) - 3
+            while btn.sizeHint().width() > limit and size > floor:
+                size -= 1
+                btn.setStyleSheet(sheet[:marker] + "font-size: %d" % size + sheet[end:])
+                btn.ensurePolished()
+
+    def _shade_text(self, widget):
+        """A soft dark edge round a label's letters, on art that carries its own title.
+
+        With no shading under the column, white letters on a bright patch of the
+        picture (a muzzle flash, a sky) would vanish. The edge follows the
+        letters, so it darkens nothing else. Nothing at all on the usual menu,
+        which has its shading.
+        """
+        if not getattr(self, "own_art", False) or getattr(self, "letter_edges", None) is None:
+            return
+        self.letter_edges.add(widget)  # drawn by the layer under the column: LetterEdges
+
     def _keep_title_whole(self, label):
         """A text title claims the height of every line it wraps to.
 
@@ -14077,7 +16699,149 @@ class GameMenu(QtWidgets.QWidget):
         self.uninstall_btn.setText(self.shout(trans["uninstall"]))
         self.uninstall_btn.setToolTip(trans["tip_uninstall"])
         self.exit_btn.setText(self.shout(trans["exit"]))
-    
+        self._fit_labels()
+        self.set_sound_label()
+
+    # --- MENU MUSIC (1.5.2): a WAV under the menu, and the Sound button ---
+
+    def init_menu_music(self, parent):
+        """The disc's Menu Music, and the Sound button that turns it off and on again.
+
+        Only on a disc whose menu_config.json names a WAV that menu_music_path
+        takes: any other disc has no button and plays nothing, as before. The
+        music loops from the moment the menu shows and stops whenever the menu
+        is not the window in front, so it never plays over anything else: a
+        game, Setup, a mod tool or the uninstaller the menu starts (it stops
+        first, and the menu then closes), the bonus folder, or another program
+        the player turns to. It starts again when the player is back. Qt's
+        application state says which, the one signal every way out shares. A
+        preview plays it too, so the author hears the disc; what is pressed
+        there is not kept (keep_player_prefs).
+        """
+        self.music_path = menu_music_path(self.menu_config) if winsound is not None else ""
+        self.music_playing = False
+        # Another program's window is in front. Qt says so only when it changes, and a menu that opens
+        # behind the window the player clicked into never comes to the front, so it starts from Qt's word now.
+        app = QtWidgets.QApplication.instance()
+        self.music_away = app.applicationState() != QtCore.Qt.ApplicationActive
+        self.music_done = False  # the menu has handed the PC to a program it started, or is closing
+        self.sound_btn = None
+        if not self.music_path:
+            return
+        self.sound_btn = QtWidgets.QPushButton(parent)
+        self.sound_btn.clicked.connect(self.toggle_sound)
+        self.sound_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.sound_btn.installEventFilter(self)  # Up and Down move on through the menu, as on its other buttons
+        self.set_sound_label()
+        self._shade_text(self.sound_btn)
+        app.applicationStateChanged.connect(self.music_follow_state)
+        app.aboutToQuit.connect(self.stop_music_for_good)
+
+    def sound_on(self):
+        """The player's Sound On or Off, On until they press it."""
+        return self.player_prefs.get("sound", True) is not False
+
+    def _sound_sheet(self, size):
+        """The Sound button's look: a quiet line of the menu's, in the disc's own font and colours when it has them."""
+        edge = str(max(1, int(2 * self.scale_factor)))
+        return """
+            QPushButton {
+                background-color: transparent;
+                color: """ + self.quiet_colour + """;
+                border: none;
+                border-bottom: """ + edge + """px solid transparent;
+                padding: """ + str(int(4 * self.scale_factor)) + """px """ + str(int(8 * self.scale_factor)) + """px;
+                font-size: """ + str(size) + """px;
+                font-weight: normal;
+                letter-spacing: """ + str(int(1 * self.scale_factor)) + """px;
+                """ + self.font_rule + """
+            }
+            QPushButton:hover, QPushButton:focus {
+                color: """ + (self.theme["accent"] or "#ffffff") + """;
+                border-bottom: """ + edge + """px solid """ + (self.theme["accent"] or "#ffffff") + """;
+            }
+            QPushButton:pressed {
+                color: #cccccc;
+            }
+        """
+
+    def set_sound_label(self):
+        """Sound: On or Sound: Off in the menu's language, in the top corner beside the close button.
+
+        Sized to its words and held to its corner: a label too wide for it (a
+        disc's own large font, a long language) steps its type down, never
+        below 70% of its size, as the column's buttons do (_fit_labels).
+        """
+        btn = getattr(self, "sound_btn", None)
+        if btn is None:
+            return
+        trans = self.translations[self.current_lang]
+        btn.setText(trans["sound_on"] if self.sound_on() else trans["sound_off"])
+        full = int(14 * self.scale_factor * self.theme["scale"])
+        size, floor = full, max(1, int(full * 0.7))
+        room = int(360 * self.scale_factor)
+        while True:
+            btn.setStyleSheet(self._sound_sheet(size))
+            btn.ensurePolished()
+            hint = btn.sizeHint()
+            if hint.width() <= room or size <= floor:
+                break
+            size -= 1
+        width = min(hint.width(), room)
+        right = int(1215 * self.scale_factor)  # 10 short of the close button
+        top = int(15 * self.scale_factor) + max(0, (int(40 * self.scale_factor) - hint.height()) // 2)
+        btn.setGeometry(right - width, top, width, hint.height())
+
+    def toggle_sound(self):
+        """The Sound button: the music off, or on again, remembered on this PC beside the stars and the language."""
+        self.player_prefs["sound"] = not self.sound_on()
+        self.keep_player_prefs()
+        self.set_sound_label()
+        self.refresh_music()
+
+    def music_follow_state(self, state):
+        """Windows' word that the menu is in front again, or that another program is: see init_menu_music."""
+        self.music_away = state != QtCore.Qt.ApplicationActive
+        self.refresh_music()
+
+    def refresh_music(self):
+        """Play the music or stop it, as the Sound button, the menu's place in front and its showing say."""
+        if not getattr(self, "music_path", ""):
+            return
+        want = not self.music_done and not self.music_away and self.sound_on() and self.isVisible()
+        if want == self.music_playing:
+            return
+        try:
+            if want:
+                winsound.PlaySound(self.music_path, winsound.SND_FILENAME | winsound.SND_ASYNC
+                                   | winsound.SND_LOOP | winsound.SND_NODEFAULT)
+            else:
+                winsound.PlaySound(None, 0)
+        except Exception:
+            # A PC with no sound device, or a file its Windows will not play: the
+            # menu is quiet, and the button still says what the player chose.
+            want = False
+        self.music_playing = want
+
+    def stop_music_for_good(self):
+        """Stop the music before the menu hands the PC to a program it starts, or as it closes."""
+        self.music_done = True
+        self.refresh_music()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "music_path", ""):
+            QtCore.QTimer.singleShot(0, self.menu_shown)
+
+    def menu_shown(self):
+        """Once the window is drawn: the Sound button measured again, its font now resolved, and the music."""
+        self.set_sound_label()
+        self.refresh_music()
+
+    def closeEvent(self, event):
+        self.stop_music_for_good()
+        super().closeEvent(event)
+
     # --- ADD TO STEAM (adds installed game to the Steam library) ---
 
     def _steam_root(self):
@@ -14117,18 +16881,124 @@ class GameMenu(QtWidgets.QWidget):
         exits, so anything added underneath a running Steam is thrown away when
         the player next closes it. Worth saying out loud rather than letting
         them wonder why the game vanished.
+
+        The process id Steam keeps in the registry is only a lead. Steam sets it
+        back to 0 when it exits cleanly, but a Steam ended from Task Manager or
+        by a crash can leave the old number there, and restarting the PC does
+        not clear it. Trusting the number alone told a player "Steam is
+        running" on every press, with Steam long gone. So the number counts only
+        while a live steam.exe answers to it. Any steam.exe running on this PC
+        counts too, under any account: an entry written beneath a Steam the
+        registry does not mention is lost all the same when that Steam exits.
+
+        If the check itself goes wrong, the answer is "running". Being asked to
+        exit Steam once more costs a press; writing under a live Steam costs the
+        entry.
         """
+        pid = 0
         try:
             import winreg
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                  r"Software\\Valve\\Steam\\ActiveProcess")
             try:
-                pid, _type = winreg.QueryValueEx(key, "pid")
+                value, _type = winreg.QueryValueEx(key, "pid")
             finally:
                 winreg.CloseKey(key)
-            return bool(pid)
+            pid = int(value)
+        except (ImportError, OSError, TypeError, ValueError):
+            pid = 0  # no key, no value, or not a number: the process list decides
+        try:
+            if pid > 0 and self._pid_image_name(pid) == "steam.exe":
+                return True
+            return "steam.exe" in self._process_names()
         except Exception:
-            return False
+            return True
+
+    def _pid_image_name(self, pid):
+        """The file name of the program running as process pid, in lowercase.
+
+        None when no live process has that id. "" when one does but Windows
+        will not say which program it is. A process that has ended can still be
+        opened while anything holds a handle to it, so its exit code is read
+        too, and only a process still running answers.
+        """
+        handle_type = ctypes.c_void_p
+        dword = ctypes.c_uint32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [dword, ctypes.c_int, dword]
+        kernel32.OpenProcess.restype = handle_type
+        kernel32.GetExitCodeProcess.argtypes = [handle_type, ctypes.POINTER(dword)]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            handle_type, dword, ctypes.c_wchar_p, ctypes.POINTER(dword)]
+        kernel32.QueryFullProcessImageNameW.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [handle_type]
+        kernel32.CloseHandle.restype = ctypes.c_int
+
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: no process has this id
+                return None
+            if error == 5:  # ERROR_ACCESS_DENIED: one does, and it is not ours to ask
+                return ""
+            raise ctypes.WinError(error)
+        try:
+            code = dword()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if code.value != 259:  # STILL_ACTIVE
+                return None
+            size = dword(1024)
+            path = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+                return ""
+            return os.path.basename(path.value).lower()
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _process_names(self):
+        """The file name of every program running on this PC, in lowercase.
+
+        Every account's, not only this one's: the same list Task Manager reads.
+        """
+        class ProcessEntry(ctypes.Structure):  # PROCESSENTRY32W
+            _fields_ = [("dwSize", ctypes.c_uint32), ("cntUsage", ctypes.c_uint32),
+                        ("th32ProcessID", ctypes.c_uint32), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", ctypes.c_uint32), ("cntThreads", ctypes.c_uint32),
+                        ("th32ParentProcessID", ctypes.c_uint32), ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", ctypes.c_uint32), ("szExeFile", ctypes.c_wchar * 260)]
+
+        handle_type = ctypes.c_void_p
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        kernel32.CreateToolhelp32Snapshot.restype = handle_type
+        for step in (kernel32.Process32FirstW, kernel32.Process32NextW):
+            step.argtypes = [handle_type, ctypes.POINTER(ProcessEntry)]
+            step.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [handle_type]
+        kernel32.CloseHandle.restype = ctypes.c_int
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:  # INVALID_HANDLE_VALUE
+            raise ctypes.WinError(ctypes.get_last_error())
+        names = set()
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(ProcessEntry)
+            more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while more:
+                names.add(entry.szExeFile.lower())
+                more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+            error = ctypes.get_last_error()
+        finally:
+            kernel32.CloseHandle(snapshot)
+        # The walk ends on ERROR_NO_MORE_FILES. Anything else, or an empty list
+        # (this menu is running, so it cannot be empty), means the list is not
+        # whole, and a list with Steam missing from it is worse than none.
+        if error != 18 or not names:
+            raise OSError(error, "the list of running programs could not be read")
+        return names
 
     def _steam_shortcuts_paths(self):
         """shortcuts.vdf for every Steam profile on this PC.
@@ -14211,6 +17081,68 @@ class GameMenu(QtWidgets.QWidget):
                     found.add(value.lower())
             pos = end + 1
 
+    def _vdf_present_shortcuts(self, data):
+        """Every shortcut in this shortcuts.vdf by its Exe as _vdf_existing_exes gives it: (appid, icon) each, in list order.
+
+        A later disc of the same game updates the pictures of the shortcuts
+        already there (1.5.2), and Steam shows a shortcut's pictures under the
+        appid in its entry. That disc may carry the game under another name, and
+        so another _steam_appid, so the number is read from the list. An entry
+        with no appid (an older Steam, another tool) is filed by Steam under
+        the id it works out from the Exe and AppName as they are stored, quotes
+        and all; one with neither is left out. Every entry with the Exe is
+        listed, so a second shortcut to the game is updated too. Walked as
+        _count_vdf_entries walks it; raises ValueError or IndexError on a list
+        it cannot read.
+        """
+        import zlib
+        found = {}
+        pos = data.index(b'\\x00shortcuts\\x00') + len(b'\\x00shortcuts\\x00')
+        depth = 0
+        entry = {}
+        while pos < len(data):
+            kind = data[pos]
+            pos += 1
+            if kind == 8:
+                if depth == 0:
+                    return found
+                depth -= 1
+                if depth == 0:
+                    exe, appid = entry.get(b'exe'), entry.get(b'appid')
+                    if appid is None and exe is not None and entry.get(b'appname') is not None:
+                        appid = (zlib.crc32(exe + entry[b'appname']) | 0x80000000) & 0xFFFFFFFF
+                    value = (exe or b'').decode('utf-8', 'replace').strip().strip('"')
+                    if value and appid is not None:
+                        try:
+                            key = os.path.normcase(os.path.normpath(value))
+                        except ValueError:
+                            key = value.lower()
+                        icon = entry.get(b'icon', b'').decode('utf-8', 'replace')
+                        found.setdefault(key, []).append((appid, icon))
+                    entry = {}
+                continue
+            end = data.index(b'\\x00', pos)
+            key = data[pos:end]
+            pos = end + 1
+            if kind == 0:
+                depth += 1
+            elif kind == 1:
+                end = data.index(b'\\x00', pos)
+                if depth == 1 and key in (b'Exe', b'icon'):
+                    entry[key.lower()] = data[pos:end]
+                elif depth == 1 and key.lower() == b'appname':
+                    entry[b'appname'] = data[pos:end]
+                pos = end + 1
+            elif kind == 2:
+                if pos + 4 > len(data):
+                    raise ValueError("unterminated vdf")
+                if depth == 1 and key.lower() == b'appid':
+                    entry[b'appid'] = int.from_bytes(data[pos:pos + 4], 'little')
+                pos += 4
+            else:
+                raise ValueError("unknown vdf field type %r" % kind)
+        raise ValueError("unterminated vdf")
+
     def _steam_appid(self, name, exe):
         """The id Steam files this shortcut under.
 
@@ -14222,40 +17154,157 @@ class GameMenu(QtWidgets.QWidget):
         import zlib
         return (zlib.crc32((exe + name).encode('utf-8')) | 0x80000000) & 0xFFFFFFFF
 
-    def _install_steam_art(self, grid_dir, appid):
+    def _install_steam_art(self, grid_dir, appid, keep_replaced=False):
         """Drop this disc's library art into Steam's grid folder.
 
         Rialto composed the pictures at build time and put them in menu/steam/,
         because the disc menu ships without Pillow and cannot make them itself.
         All that happens here is a copy under the names Steam looks for:
-        <appid>p.png is the tall library capsule, <appid>.png the grid tile,
-        <appid>_hero.png the banner, <appid>_logo.png the transparent logo
-        Steam lays over the banner.
+        <appid>p is the Library Capsule, the portrait in the library;
+        <appid> the Library Header, the wide one on Recent Games;
+        <appid>_hero the Library Hero, the banner on the game's page;
+        <appid>_logo the Library Logo, the transparent logo Steam lays
+        over the banner. The developer's own pieces (1.5.2) are in the same
+        files, so this copies whichever the disc carries.
+
+        Steam shows a shortcut's logo only once <appid>.json says where it
+        sits, so a logo brings the place Steam ROM Manager writes, bottom
+        left; one already there is the player's own and is left alone.
 
         Entirely cosmetic, and every step of it is allowed to fail: without it
         Steam shows a grey box with the exe name under it, which is what every
         non-Steam shortcut looks like anyway.
+
+        `keep_replaced` is a later disc's press (1.5.2): the shortcut already
+        has pictures, which may be the player's own, so each one replaced or
+        removed is kept beside it first (_keep_steam_picture), and a piece
+        whose picture cannot be kept is not copied.
         """
         source_dir = os.path.join(menu_dir(), "steam")
         if not os.path.isdir(source_dir):
             return False
-        pairs = (("capsule.png", "%dp.png"), ("wide.png", "%d.png"),
-                 ("hero.png", "%d_hero.png"), ("logo.png", "%d_logo.png"))
+        # A piece is a .png, or a .jpg when the developer gave a JPG (1.5.2);
+        # a disc made before then has only the .png names. The copy keeps the
+        # extension, since Steam reads both, and this shortcut's copy under the
+        # other one goes, as SGDBoop does, so a picture left by an earlier ADD
+        # TO STEAM cannot stand in for this disc's.
+        pairs = (("capsule", "%dp"), ("wide", "%d"), ("hero", "%d_hero"), ("logo", "%d_logo"))
         copied = False
         try:
             os.makedirs(grid_dir, exist_ok=True)
         except OSError:
             return False
-        for filename, pattern in pairs:
+        for stem, pattern in pairs:
+            for extension in (".png", ".jpg"):
+                source = os.path.join(source_dir, stem + extension)
+                target = os.path.join(grid_dir, (pattern % appid) + extension)
+                try:
+                    if not os.path.isfile(source) or os.path.getsize(source) == 0:
+                        continue
+                    if keep_replaced and not self._keep_steam_picture(target, source):
+                        break
+                    shutil.copy2(source, target)
+                except (OSError, ValueError):
+                    continue
+                copied = True
+                for other in (".png", ".jpg", ".jpeg"):
+                    if other != extension:
+                        stale = os.path.join(grid_dir, (pattern % appid) + other)
+                        if keep_replaced:
+                            self._keep_steam_picture(stale)
+                            continue
+                        try:
+                            os.remove(stale)
+                        except OSError:
+                            pass
+                if stem == "logo":
+                    place = os.path.join(grid_dir, "%d.json" % appid)
+                    try:
+                        if not os.path.exists(place):
+                            with open(place, "w", encoding="utf-8") as f:
+                                json.dump({"nVersion": 1, "logoPosition": {
+                                    "pinnedPosition": "BottomLeft", "nWidthPct": 50,
+                                    "nHeightPct": 50, "nVersion": 1}}, f)
+                    except (OSError, ValueError):
+                        pass
+                break
+        return copied
+
+    def _keep_steam_picture(self, path, source=None):
+        """Keep a grid picture a later disc's press replaces or removes, as <name>.rialto-backup beside it.
+
+        The shortcut's pictures may be the player's own, set by hand or by
+        another tool, so the one there just before this press is kept, as the
+        list's .rialto-backup keeps the list; Steam reads neither. A picture
+        that is already this disc's (`source`, the same disc pressed again) is
+        not. True when `path` is free to be written: nothing there, this disc's
+        own, or kept.
+        """
+        try:
+            if not os.path.isfile(path):
+                return True
+            if source and os.path.getsize(path) == os.path.getsize(source):
+                with open(path, "rb") as here, open(source, "rb") as disc:
+                    if here.read() == disc.read():
+                        return True
+            os.replace(path, path + ".rialto-backup")
+            return True
+        except OSError:
+            return False
+
+    def _update_steam_icon(self, grid_dir, appid, icon_field):
+        """A later disc's Shortcut Icon over the copy an earlier disc left, where the list's icon field names it.
+
+        The icon field is in shortcuts.vdf, which a later disc does not write,
+        so this disc's icon.ico or icon.png goes in only where the field
+        already points: <appid>_icon with the same extension in this grid
+        folder, as _install_steam_icon names it. A field naming anything else
+        (the installed game_icon.ico, which the install itself replaces) is
+        left alone. True when this disc's icon is in place.
+        """
+        field = icon_field.strip().strip('"')
+        if not field:
+            return False
+        source_dir = os.path.join(menu_dir(), "steam")
+        for filename in ("icon.ico", "icon.png"):
+            target = os.path.join(grid_dir, "%d_icon%s" % (appid, os.path.splitext(filename)[1]))
             source = os.path.join(source_dir, filename)
+            try:
+                if os.path.normcase(os.path.normpath(field)) != os.path.normcase(os.path.normpath(target)):
+                    continue
+                if not os.path.isfile(source) or os.path.getsize(source) == 0:
+                    return False
+                if not self._keep_steam_picture(target, source):
+                    return False
+                shutil.copy2(source, target)
+                return True
+            except (OSError, ValueError):
+                return False
+        return False
+
+    def _install_steam_icon(self, grid_dir, appid):
+        """This disc's Shortcut Icon, copied into Steam's grid folder: its new path, or "".
+
+        The shortcut's icon field names a file, and a file on the disc is gone
+        once the disc is out of the drive. So the developer's icon (1.5.2),
+        icon.ico or icon.png in menu/steam/, is copied to <appid>_icon beside
+        the other art, as Steam ROM Manager does, and the field points there.
+        No icon on the disc, or no copy made: "", and the caller keeps the
+        installed game_icon.ico as before.
+        """
+        source_dir = os.path.join(menu_dir(), "steam")
+        for filename in ("icon.ico", "icon.png"):
+            source = os.path.join(source_dir, filename)
+            target = os.path.join(grid_dir, "%d_icon%s" % (appid, os.path.splitext(filename)[1]))
             try:
                 if not os.path.isfile(source) or os.path.getsize(source) == 0:
                     continue
-                shutil.copy2(source, os.path.join(grid_dir, pattern % appid))
-                copied = True
+                os.makedirs(grid_dir, exist_ok=True)
+                shutil.copy2(source, target)
+                return target
             except (OSError, ValueError):
                 continue
-        return copied
+        return ""
 
     def _vdf_shortcut_entry(self, index, name, exe, start_dir, icon):
         import struct
@@ -14378,6 +17427,7 @@ class GameMenu(QtWidgets.QWidget):
 
         added_names = []
         already_there = []
+        pictures_updated = False
         reached_any = False
         blocked = []
 
@@ -14385,6 +17435,7 @@ class GameMenu(QtWidgets.QWidget):
             try:
                 existing = set()
                 next_index = 0
+                before = None
                 body = b'\\x00shortcuts\\x00'
 
                 if os.path.exists(vdf_path) and os.path.getsize(vdf_path) > 0:
@@ -14402,33 +17453,75 @@ class GameMenu(QtWidgets.QWidget):
                         continue
                     existing = self._vdf_existing_exes(data)
                     body = data[:-2]
-                    try:
-                        with open(vdf_path + '.rialto-backup', 'wb') as f:
-                            f.write(data)
-                    except OSError:
-                        pass  # a backup is a nicety, not a reason to stop
+                    before = data
 
                 reached_any = True
 
                 # Skip anything already in this profile's library, so a second
-                # click is a no-op rather than a duplicate.
+                # click never adds a duplicate.
                 pending = []
+                present = []
                 for name, exe_path in games:
                     key = os.path.normcase(os.path.normpath(exe_path))
                     if key in existing:
+                        if key not in present:
+                            present.append(key)
                         if name not in already_there:
                             already_there.append(name)
                     else:
                         pending.append((name, exe_path))
 
+                # A later disc of a game already in Steam (1.5.2): each of its
+                # shortcuts keeps its place in the list, which is not written,
+                # and its pictures come from this disc, under the appid the
+                # list files it under; the pictures there before are kept
+                # beside them. No appid to be had from the list, or no Steam
+                # art on the disc, and nothing is copied, nor said to be.
+                if present:
+                    try:
+                        listed = self._vdf_present_shortcuts(before or b'')
+                    except (ValueError, IndexError):
+                        listed = {}
+                    grid_dir = os.path.join(os.path.dirname(vdf_path), "grid")
+                    for key in present:
+                        for appid, icon_field in listed.get(key, []):
+                            if self._install_steam_art(grid_dir, appid, keep_replaced=True):
+                                pictures_updated = True
+                            if self._update_steam_icon(grid_dir, appid, icon_field):
+                                pictures_updated = True
+
                 if not pending:
                     continue
 
+                # The list as it was before this press changed it, written only
+                # when the press changes it: a press that adds nothing would
+                # otherwise put the list that already holds the game over the
+                # player's own (readiness, 4 Nov).
+                if before is not None:
+                    try:
+                        with open(vdf_path + '.rialto-backup', 'wb') as f:
+                            f.write(before)
+                    except OSError:
+                        pass  # a backup is a nicety, not a reason to stop
+
+                # The Shortcut Icon goes into the grid folder before the entry
+                # is written, because the entry names the copy. The appid is
+                # the one _vdf_shortcut_entry files the shortcut under, from
+                # the name as it cuts it.
+                grid_dir = os.path.join(os.path.dirname(vdf_path), "grid")
+                icons = [self._install_steam_icon(grid_dir, self._steam_appid(str(name)[:200], exe_path))
+                         for name, exe_path in pending]
                 for offset, (name, exe_path) in enumerate(pending):
                     body += self._vdf_shortcut_entry(next_index + offset, name, exe_path,
-                                                     os.path.dirname(exe_path), icon)
+                                                     os.path.dirname(exe_path), icons[offset] or icon)
 
                 if not self._write_vdf_atomically(vdf_path, body + b'\\x08\\x08'):
+                    for copied_icon in icons:
+                        try:
+                            if copied_icon:
+                                os.remove(copied_icon)
+                        except OSError:
+                            pass
                     blocked.append("could not be written")
                     continue
 
@@ -14436,9 +17529,8 @@ class GameMenu(QtWidgets.QWidget):
                 # with a filename under it. Never mentioned in the popup: the
                 # player opens Steam and sees it, which is worth more than
                 # being told about it beforehand.
-                grid_dir = os.path.join(os.path.dirname(vdf_path), "grid")
                 for name, exe_path in pending:
-                    self._install_steam_art(grid_dir, self._steam_appid(name, exe_path))
+                    self._install_steam_art(grid_dir, self._steam_appid(str(name)[:200], exe_path))
 
                 for name, _exe in pending:
                     if name not in added_names:
@@ -14454,7 +17546,7 @@ class GameMenu(QtWidgets.QWidget):
                                trans["steam_added_detail"])
         elif already_there:
             self._menu_message(trans["steam_already_title"], trans["steam_already"] % ", ".join(already_there),
-                               trans["steam_already_detail"])
+                               trans["steam_art_updated"] if pictures_updated else trans["steam_already_detail"])
         elif blocked:
             self._menu_message(trans["steam_failed_title"], trans["steam_blocked"], trans["steam_blocked_detail"])
         elif reached_any:
@@ -14523,9 +17615,18 @@ class GameMenu(QtWidgets.QWidget):
             pass
 
     def _message_box(self, icon, title, body, detail):
-        """A dark message box carrying the disc's own icon."""
+        """A dark message box carrying the disc's own icon.
+
+        While the Menu Music plays, the box's icon is drawn as a picture: for a
+        box with an icon of its own, Windows plays its alert sound in the menu's
+        process, and PlaySound plays one sound at a time, so the sound would end
+        the music's loop for good. A box with a picture plays no sound.
+        """
         box = QtWidgets.QMessageBox(self)
-        box.setIcon(icon)
+        if getattr(self, "music_playing", False):
+            box.setIconPixmap(QtWidgets.QMessageBox.standardIcon(icon))
+        else:
+            box.setIcon(icon)
         box.setWindowTitle(title)
         box.setTextFormat(QtCore.Qt.PlainText)  # "Looked for:" quotes the config
         box.setText(body)
@@ -14572,6 +17673,7 @@ class GameMenu(QtWidgets.QWidget):
         # out of menu_config.json cannot be handed straight to Popen.
         exe_path = self._configured_exe(rel_exe)
         if exe_path:
+            self.stop_music_for_good()
             subprocess.Popen([exe_path] + (args or []), cwd=os.path.dirname(exe_path))
             QtWidgets.QApplication.instance().quit()
         else:
@@ -14588,7 +17690,8 @@ class GameMenu(QtWidgets.QWidget):
         order = [self.play_btn, getattr(self, "compat_btn", None)]
         order += list(getattr(self, "quick_btns", []))
         order += [getattr(self, "mods_btn", None), getattr(self, "steam_btn", None),
-                  getattr(self, "bonus_btn", None), self.uninstall_btn, self.exit_btn]
+                  getattr(self, "bonus_btn", None), self.uninstall_btn, self.exit_btn,
+                  getattr(self, "sound_btn", None)]  # in its corner, after EXIT (1.5.2)
         return [b for b in order if b is not None]
 
     def game_label(self, game):
@@ -14672,10 +17775,11 @@ class GameMenu(QtWidgets.QWidget):
                 btn.setToolTip(name)
             btn.clicked.connect(lambda _checked=False, exe=game["exe"]: self.start_one_game(exe))
             btn.installEventFilter(self)
+            self._shade_text(btn)
             layout.addWidget(btn)
             # A line added to a menu already on screen is shown by Qt a moment
             # later, and a hidden line measures as nothing: starring a game on the
-            # page squeezed the whole list to 1 px until the menu was started again.
+            # page shrank the whole list to 1 px until the menu was started again.
             btn.show()
             self.quick_btns.append(btn)
         # As tall as its lines where the column has room, and never shorter than
@@ -14736,13 +17840,14 @@ class GameMenu(QtWidgets.QWidget):
             QPushButton:hover { border-color: #ffffff; background-color: rgba(60, 60, 60, 220); }
             QFrame#gameRow { background-color: rgba(40, 40, 40, 200); border: 2px solid rgba(255, 255, 255, 40); }
             QFrame#gameRow:hover, QFrame#gameRow:focus {
-                border-color: #ffffff; background-color: rgba(60, 60, 60, 220);
+                border-color: """ + (self.theme["accent"] or "#ffffff") + """; background-color: rgba(60, 60, 60, 220);
             }
-            QLabel#gameName { font-size: 15px; font-weight: bold; letter-spacing: 1px; }
+            QLabel#gameName { font-size: """ + str(int(15 * self.theme["scale"])) + """px; font-weight: bold; letter-spacing: 1px;
+                color: """ + (self.theme["text"] or "#ffffff") + """; """ + self.font_rule + """ }
             QLabel#gameLine { font-size: 13px; color: #cccccc; }
             QPushButton#star { font-size: 20px; padding: 8px 14px; text-align: center; color: #888888; }
             QPushButton#star[starred="true"] { color: #ffd54a; }
-            QPushButton#star:focus { border-color: #ffffff; }
+            QPushButton#star:focus { border-color: """ + (self.theme["accent"] or "#ffffff") + """; }
             QPushButton#sort {
                 font-size: 11px; padding: 6px 10px; text-align: center;
                 color: #888888; border: 1px solid rgba(255, 255, 255, 20);
@@ -14755,7 +17860,8 @@ class GameMenu(QtWidgets.QWidget):
 
         head = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel(self.shout(trans["choose_game"]))
-        title.setStyleSheet("font-size: 13px; font-weight: bold; letter-spacing: 4px; color: #aaaaaa;")
+        title.setStyleSheet("font-size: %dpx; font-weight: bold; letter-spacing: 4px; color: %s; %s"
+                            % (int(13 * self.theme["scale"]), self.theme["accent"] or "#aaaaaa", self.font_rule))
         head.addWidget(title)
         head.addStretch()
         sort_buttons = {}
@@ -15262,6 +18368,7 @@ class GameMenu(QtWidgets.QWidget):
             # pressing it. Fall back to the normal not-found reporting.
             self.launch_game()
             return
+        self.stop_music_for_good()
         subprocess.Popen([setup], cwd=os.path.dirname(setup))
         QtWidgets.QApplication.instance().quit()
 
@@ -15329,6 +18436,7 @@ class GameMenu(QtWidgets.QWidget):
         game_exe, searched = self.find_game_exe()
 
         if game_exe and os.path.isfile(game_exe):
+            self.stop_music_for_good()
             subprocess.Popen([game_exe] + args, cwd=os.path.dirname(game_exe))
             QtWidgets.QApplication.instance().quit()
             return
@@ -15400,6 +18508,7 @@ class GameMenu(QtWidgets.QWidget):
 
         mod_exe = self._resolve_mod_exe()
         if mod_exe:
+            self.stop_music_for_good()
             subprocess.Popen([mod_exe], cwd=os.path.dirname(mod_exe))
             QtWidgets.QApplication.instance().quit()
         else:
@@ -15414,6 +18523,7 @@ class GameMenu(QtWidgets.QWidget):
         if os.path.exists(uninstaller):
             trans = self.translations[self.current_lang]
             if self._menu_confirm(trans["warning"], trans["confirm_uninstall"], trans["tip_uninstall"]):
+                self.stop_music_for_good()
                 subprocess.Popen([uninstaller])
                 QtWidgets.QApplication.instance().quit()
         else:

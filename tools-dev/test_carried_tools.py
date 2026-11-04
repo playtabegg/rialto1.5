@@ -294,7 +294,8 @@ def real_disc(src, tree, mkisofs, isoinfo):
 
     ns = {"os": os, "re": re, "shutil": shutil, "subprocess": subprocess}
     exec(mkisofs_code(src, tree), ns)
-    exec("class Real(Host):\n" + class_methods(src, tree, ["_write_one_image", "_fileset_size", "image_growth"]),
+    exec("class Real(Host):\n" + class_methods(src, tree, ["_write_one_image", "_fileset_size", "image_growth",
+                                                             "tool_time_limit"]),
          dict(ns, Host=Host), ns)
     iso = os.path.join(output, "Caf\u00e9 \u30b2\u30fc\u30e0.iso")
     made, why = ns["Real"]()._write_one_image("mkisofs", mkisofs, output, iso, items, "CAFE GAME", False,

@@ -12,7 +12,13 @@ Source-extracted: no tkinter window is opened. The real dialog is opened and
 measured by tools-dev/test_fits_every_screen.py: 636 lines tall at 100
 percent (652 before B13.4 took 16 lines of padding), inside the 640 that a
 720-line screen leaves under its taskbar and the dialog's title bar.
+
+Steam has a third column of its own (1.5.2): ticking Add to Steam shows five
+rows of Steam art under the box, 150 lines more than either column had to
+give. With them showing the dialog is 1220 across and 585 lines tall, and it
+is sized with them showing whether or not the box is ticked.
 """
+import re
 import ast
 import os
 import sys
@@ -46,13 +52,17 @@ extras = method(src, "configure_disc_extras") or ""
 print("Disc Extras: two columns, sized to what they hold")
 ok("no fixed 990-pixel height any more", "height=990" not in extras)
 ok("it measures itself once built", "self.fit_dialog_to_screen(dialog" in extras)
-ok("two columns, left and right", "left = tk.Frame(columns" in extras and "right = tk.Frame(columns" in extras)
-for title, side in (("Bonus content", "left"), ("Mods", "left"), ("Steam", "left"),
+ok("two columns, left and right, and Steam's own",
+   "left = tk.Frame(columns" in extras and "right = tk.Frame(columns" in extras
+   and "steam_col = tk.Frame(columns" in extras)
+for title, side in (("Bonus content", "left"), ("Mods", "left"), ("Steam", "steam_col"),
                     ("Compatibility mode", "right"), ("Mac and Linux on the same disc", "right")):
     at = extras.find('section("%s' % title)
-    before = extras[:at]
-    last_left, last_right = before.rfind("col = left"), before.rfind("col = right")
-    ok("%s sits in the %s column" % (title, side), at > 0 and ((last_left > last_right) == (side == "left")))
+    chosen = re.findall(r"\bcol, wrap = (\w+), \d+", extras[:at])
+    ok("%s sits in the %s column" % (title, side), at > 0 and chosen and chosen[-1] == side, chosen)
+ok("the Steam rows are measured as shown, whether or not the box is ticked",
+   "holds = dialog.winfo_reqheight()" in extras
+   and "self.fit_dialog_to_screen(dialog, self.DISC_EXTRAS_WIDTH, holds)" in extras)
 ok("Files to Place on the PC opens from the Done row, which costs no height",
    'placed_btn = ttk.Button(button_row,' in extras and 'placed_btn.pack(side="left")' in extras)
 ok("nothing but the Done row, the lead line and the columns is packed straight into the body",
@@ -86,6 +96,9 @@ frame = (31, 1, 7)  # Windows 10 and 11 at 100 percent: title bar, border seen, 
 print("the one rule, for a titled dialog over the main window: (width, height, x, y)")
 ok("Disc Extras at 1080p at 150 percent: whole, 4 lines from the top of the work area",
    rule(1180, 636, (0, 0, 1280, 672), frame, over=(290, 0, 700, 672)) == (1180, 636, 50, 4))
+ok("and with Steam's column, 1220 across: whole, inside the 1280 across",
+   rule(1220, 585, (0, 0, 1280, 672), frame, over=(290, 0, 700, 672))[:2] == (1220, 585)
+   and 0 <= rule(1220, 585, (0, 0, 1280, 672), frame, over=(290, 0, 700, 672))[2] <= 1280 - 1220 - 2)
 ok("a dialog that asks for more than the work area is held to it, title bar and border included",
    rule(2000, 2000, (0, 0, 1280, 672), frame) == (1278, 640, -7, 0))
 ok("a dialog over a main window at the screen's edge is brought inside the work area",

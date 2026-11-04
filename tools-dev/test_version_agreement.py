@@ -2,7 +2,8 @@
 
 Rialto.pyw carries ``__version__``; packaging/rialto.spec and packaging/menu.spec read it from
 that line for the EXE version resources; the release feed compares against
-it. This pins that the three cannot drift.
+it. This pins that the three cannot drift, and that the Help Guide and the
+build commands' examples name the same version (1.5.2).
 
 Usage: python tools-dev/test_version_agreement.py [path-to-rialto1.5]
 """
@@ -35,6 +36,19 @@ for spec in ("packaging/rialto.spec", "packaging/menu.spec"):
     text = read(spec)
     check("VERSION = (1, 5, 0, 0)" not in text, spec + " still hard-codes a version tuple")
     check('__version__ = "' in text and "Rialto.pyw" in text, spec + " does not read __version__ from Rialto.pyw")
+
+# Where else the version is written out (1.5.2): the guide's masthead and footer, and the build commands'
+# examples. A bump that misses one leaves the last release's number there.
+guide = read("docs/rialto-guide.html")
+check("Version %s</p>" % version in guide and "<strong>Rialto %s</strong>" % version in guide,
+      "docs/rialto-guide.html does not carry version %s in its masthead and footer" % version)
+check('Disc Maker folder>" /DAppVersion=%s' % version in read("packaging/rialto-setup.iss"),
+      "packaging/rialto-setup.iss's build example is not for %s" % version)
+check("Rialto-%s-Disc-Maker.zip" % version in read("tools-dev/package_release.py"),
+      "tools-dev/package_release.py's example does not name the %s zip" % version)
+for name in ("docs/rialto-guide.html", "tools-dev/package_release.py"):
+    stale = sorted(set(re.findall(r"(?:Version |Rialto[ -]|AppVersion=)([0-9]+\.[0-9]+\.[0-9]+)", read(name))) - {version})
+    check(not stale, "%s still names %s" % (name, ", ".join(stale)))
 
 check('("Check for a New Rialto…", self.check_for_new_rialto)' in source,
       "the Help menu has no Check for a New Rialto item")

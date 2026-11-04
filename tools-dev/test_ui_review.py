@@ -246,7 +246,7 @@ ok("a newer Rialto is one click away: the signed feed's download, handed to the 
 ok("the Help Guide's footer and masthead carry %s" % version,
    "<strong>Rialto %s</strong> &middot; Built by Chandler" % version in guide
    and "Version %s</p>" % version in guide)
-ok("the window's own title strip names the version it is: Rialto 1.5.1, from __version__",
+ok("the window's own title strip names the version it is: Rialto %s, from __version__" % version,
    'text=f"Rialto {__version__}"' in flat and 'f"{APP_NAME} {__version__} - Disc Builder"' in flat)
 print()
 

@@ -512,7 +512,7 @@ def _is_link(path):
         return False
 
 
-def sign_staged_menu(menu_dir, status=print):
+def sign_staged_menu(menu_dir, status=print, timeout=300):
     """Sign THIS build's copy of menu.exe, the one staged into menu/.
 
     Rialto is open source and the generic menu.exe is the same file on every
@@ -556,13 +556,21 @@ def sign_staged_menu(menu_dir, status=print):
         return False, ("Disc menu left unsigned - signing is not set up yet. "
                        "That is the normal do-it-yourself path and the disc works fine. "
                        "Configure Signing to put your own name on it (see SIGNING.md).")
-    return sign_file(staged, status)
+    return sign_file(staged, status, timeout=timeout)
 
 
-def sign_file(file_path, status=print):
+def sign_file(file_path, status=print, timeout=300, run=None, again="build"):
     """
     Sign a file with Azure Artifact Signing. Returns (success, message).
     Never raises - callers rely on a clean fallback path.
+
+    timeout: seconds signtool may take, or None for no limit (Rialto's No
+             time limit box, 1.5.2). Signing a large .msix hashes every file
+             in it, which can take longer than the 5 minutes on a slow disk.
+    run: run(command, timeout) in place of subprocess.run, as build_msix
+         takes it. Rialto passes one that keeps its window answering.
+    again: what the author does again once No time limit is ticked, for the
+           timeout's message: "build" or "export".
     """
     status = _resilient(status)
     config = load_config()
@@ -611,8 +619,11 @@ def sign_file(file_path, status=print):
             file_path,
         ]
         status(f"🔐 Signing {os.path.basename(file_path)} via Azure Artifact Signing...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if run is not None:
+            result = run(cmd, timeout)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if result.returncode == 0:
             # Read the signature back rather than believing the exit code.
             # "Signed" is a claim that goes into the build log, onto the disc
@@ -621,7 +632,10 @@ def sign_file(file_path, status=print):
             # a timestamp server that quietly failed being the usual one.
             try:
                 from . import ssl_signing
-                verified = ssl_signing.is_signed(file_path)
+                # Reading it back hashes the file again, so it has no limit when signing has none,
+                # and goes through the same runner, so closing Rialto still stops it.
+                verified = ssl_signing.is_signed(file_path, timeout=60 if timeout is not None else None,
+                                                 run=run)
             except Exception:
                 verified = None
             if verified is False:
@@ -642,7 +656,9 @@ def sign_file(file_path, status=print):
         tail = output.strip().splitlines()[-1] if output.strip() else "unknown error"
         return False, f"signtool failed: {tail}{hint}"
     except subprocess.TimeoutExpired:
-        return False, "Signing timed out after 5 minutes"
+        minutes = round((timeout or 300) / 60)
+        return False, ("Signing timed out after %d minutes. A very large game can need more than %d minutes "
+                       "to be signed. Tick No time limit and %s again" % (minutes, minutes, again))
     except Exception as e:
         return False, f"Signing error: {e}"
     finally:

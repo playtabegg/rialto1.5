@@ -104,6 +104,10 @@ a = Analysis(
         'PyQt5.QtCore',
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
+        # Menu Music (1.5.2) is played by Windows itself through the standard
+        # library's winsound, a few KB, never QtMultimedia (excluded below). The
+        # menu imports it inside a try, so it is named here as well.
+        'winsound',
     ],
     hookspath=[],
     hooksconfig={},

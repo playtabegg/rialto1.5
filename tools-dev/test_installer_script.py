@@ -16,6 +16,8 @@ import sys
 import tempfile
 import textwrap
 
+import store_title_stub
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RIALTO = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "Rialto.pyw")
 
@@ -61,6 +63,7 @@ def build_host(src):
     module = constants + [ast.get_source_segment(src, h) for h in helpers]
 
     ns = {"os": os, "re": __import__("re"), "shutil": shutil, "json": __import__("json")}
+    ns.update(store_title_stub.namespace(src))  # every name the player sees (4 Nov 2026)
     exec("\n\n".join(module), ns)
     exec("class Host:\n" + textwrap.indent("\n\n".join(methods), "    "), ns)
     host = ns["Host"]()
@@ -124,6 +127,11 @@ def main():
          "DefaultDirName=C:\\Games\\My Robot Game" in script)
     says("the menu is what the shortcuts point at",
          all("menu\\menu.exe" in line for line in directives(script, "Icons")))
+    setup = directives(script, "Setup")
+    says("installs per user, with no install mode dialog",
+         "PrivilegesRequired=lowest" in setup
+         and "PrivilegesRequiredOverridesAllowed=commandline" in setup,
+         repr([l for l in setup if l.startswith("PrivilegesRequired")]))
     shutil.rmtree(out, ignore_errors=True)
     print()
 
@@ -155,7 +163,10 @@ def main():
     # the question is whether the TITLE added one, not how many there are.
     injected = set(sources) - {p for p, _dest in in_root_save_patterns(src)}
     says("no Source: was injected", injected == {"*"}, repr(sorted(injected)))
-    says("no [Code] section was injected", script.count("[Code]") == 0)
+    # The one [Code] is Rialto's own: the install's identity, which every disc now writes, because a disc
+    # before it may have named the game with the store's format (readiness, 4 Nov).
+    says("no [Code] section was injected: the one there is the install's identity",
+         script.count("[Code]") == 1 and "\n[Code]\nvar\n  EarlierGroupName: String;\n" in script)
     says("generated installer.iss contains no function IsWin64",
          "function IsWin64" not in script)
     shutil.rmtree(out, ignore_errors=True)

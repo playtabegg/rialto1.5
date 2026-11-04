@@ -36,7 +36,7 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Python was not found on your PATH.
     echo.
-    echo   Rialto needs Python 3.9 or newer ^(64-bit^). 3.9 - 3.12 is the tested range.
+    echo   Rialto needs 64-bit Python 3.12 or later.
     echo   Download it from: https://www.python.org/downloads/
     echo.
     echo   IMPORTANT: on the first page of the installer, tick

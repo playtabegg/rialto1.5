@@ -1,15 +1,15 @@
 # Rialto - Game Disc Builder
 # Core dependencies
 #
-# Tested on Python 3.9 - 3.12 (64-bit) on Windows 10/11.
+# Rialto 1.5.2 needs 64-bit Python 3.12 or later on Windows 10/11.
 # Versions are intentionally range-pinned so a fresh clone (and the first-run
 # `pip install -r requirements.txt` bootstrap in Rialto.pyw) installs a
 # combination known to work across that range.
 #
 # --require-hashes is deliberately not used here. That mode needs a hash for
 # every transitive wheel, and those wheels differ by Python minor version
-# (3.9 vs 3.12) and platform. A single hash-pinned file would break
-# the 3.9-3.12 first-run bootstrap.
+# (3.12, 3.13, 3.14) and platform. A single hash-pinned file would break
+# the first-run bootstrap across that range.
 
 # Image processing
 pillow>=10,<12

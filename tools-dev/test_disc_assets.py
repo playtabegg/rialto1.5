@@ -4,10 +4,11 @@ Three things a build used to get wrong, all of them the build being
 quietly optimistic:
 
   1. The fill meter weighed the source game folder and stopped. It could
-     read far under the finished disc, because bonus, the mod
-     folder and the Mac/Linux builds ride on the disc root AND inside the
-     installer, and the menu folder (a 38 MB menu.exe plus the background)
-     was not counted at all. An author is told a DVD-sized disc fits on a CD.
+     read far under the finished disc, because bonus and the mod folder
+     ride on the disc root AND inside the installer, the Mac/Linux builds
+     ride on the disc root, and the menu folder (a 38 MB menu.exe plus the
+     background) was not counted at all. An author is told a DVD-sized disc
+     fits on a CD. Where each lands is checked in test_meter_places.py.
   2. The menu set video_loaded = True the moment it called play(). QMediaPlayer
      loads asynchronously, so a video Windows cannot decode reported success
      and painted an opaque black rectangle over the whole menu, with the
@@ -20,6 +21,7 @@ Source-extracted and exec'd on stub objects: no tkinter, no PyQt5.
 import ast
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -125,22 +127,84 @@ def main():
         fill(os.path.join(game, "mod-maker", "Maker.exe"), 15)
         prebuilt = os.path.join(base, "menu.exe")
         fill(prebuilt, 38)
-        background = os.path.join(base, "background.mp4")
+        background = os.path.join(base, "background.gif")
         fill(background, 19)
+        video = os.path.join(base, "background.mp4")
+        fill(video, 19)
+        videos = {"VIDEO_EXTENSIONS": ast.literal_eval(module_bits(src, ["VIDEO_EXTENSIONS"]).split("=", 1)[1].strip())}
 
-        meter_src = methods(src, "RialtoApp", ["menu_staging_bytes", "RUNTIME_ALLOWANCE"])
-        h = host(meter_src, {"prebuilt_menu_exe": lambda: prebuilt},
-                 bg_path_var=Flag(background))
+        meter_src = methods(src, "RialtoApp", ["menu_staging_bytes", "menu_inside_bytes", "menu_music_source", "menu_font_choice",
+                                              "menu_theme_path", "RUNTIME_ALLOWANCE"])
+        h = host(meter_src, dict(videos, prebuilt_menu_exe=lambda: prebuilt),
+                 bg_path_var=Flag(background), steam_button_var=Flag(False))
         staged = h.menu_staging_bytes()
-        # 38 MB menu.exe + 19 MB background + 26 MB runtimes + 4 MB art/dlls
+        # 38 MB menu.exe + 19 MB background + 26 MB runtimes + 4 MB logos/dlls
         check("the menu folder is counted, in MB", round(staged / MB), 87)
+        # A video is refused by stage_menu_artwork and the disc is built with no background (1.5.2, his word of
+        # 4 November 2026: count as the build does). It was counted here at 19 MB.
+        h.bg_path_var = Flag(video)
+        check("a video background, which the build leaves out, weighs nothing, in MB",
+              round(h.menu_staging_bytes() / MB), 68)
 
-        h2 = host(meter_src, {"prebuilt_menu_exe": lambda: None}, bg_path_var=Flag(""))
+        # Add to Steam ticked (1.5.2): the capsule, header and hero Rialto composes from a background, 10 MB with
+        # the hero at 3840 x 1240; the Library Logo is the Game Logo saved again, weighed as it is. The meter's
+        # worker thread adds it (steam_art_bytes, where test_steam_art.py weighs each piece as the build writes
+        # it), so menu_staging_bytes stays as it was.
+        steam_src = methods(src, "RialtoApp", ["menu_staging_bytes", "menu_inside_bytes", "menu_music_source", "menu_font_choice",
+                                              "menu_theme_path", "RUNTIME_ALLOWANCE", "STEAM_ART_PIECES",
+                                               "STEAM_ART_ALLOWANCE", "STEAM_VIDEO_BACKGROUNDS", "steam_art_bytes",
+                                               "_steam_still_possible", "_steam_weighed", "steam_piece_bytes",
+                                               "steam_logo_bytes"])
+        from PIL import Image
+        h = host(steam_src, dict(videos, prebuilt_menu_exe=lambda: prebuilt, Image=Image),
+                 bg_path_var=Flag(background), steam_button_var=Flag(True))
+        check("with Add to Steam ticked, the menu folder as before, in MB", round(h.menu_staging_bytes() / MB), 87)
+        still = os.path.join(base, "still.jpg")
+        Image.new("RGB", (64, 36), (30, 90, 160)).save(still)
+        check("and the Steam art Rialto composes from a background, in MB", round(h.steam_art_bytes({}, still) / MB), 10)
+        check("and none with nothing to compose it from", h.steam_art_bytes({}, background), 0)
+
+        h2 = host(meter_src, dict(videos, prebuilt_menu_exe=lambda: None), bg_path_var=Flag(""),
+                  steam_button_var=Flag(False))
         ok("a missing prebuilt menu still reserves room", h2.menu_staging_bytes() >= 60 * MB)
 
         # The whole point: these land on the media twice.
         ok("the source tree alone is far lighter than the disc",
            (20 + 10 + 15) * MB < (20 + 10 + 15) * MB + staged)
+
+        # --------------------------------------------------------------
+        print("1b. each file is counted once (1.5.2): extras inside the game folder that the profile also names")
+        weights = host(methods(src, "RialtoApp", ["disc_weights", "RUNTIME_ALLOWANCE", "DISC1_FILES_ALLOWANCE"]))
+        bonus, maker = os.path.join(game, "bonus"), os.path.join(game, "mod-maker")
+
+        def meter(game_path, extras, duplicated=(maker, bonus)):
+            # The extras in refresh_disc_meter's order; the last is the bonus folder.
+            return weights.disc_weights(game_path, extras, list(duplicated), 0)[0]
+
+        # The game folder holds both, in the installer; the disc root holds them again.
+        right = (20 + 10 + 15) * MB + (15 + 10) * MB
+        check("the profile names the bonus folder inside the game folder, in MB",
+              meter(game, ["", "", "", "", "", "", "", bonus]) / MB, right / MB)
+        check("the same, spelled in capitals (d: and D:), in MB",
+              meter(game, ["", "", "", "", "", "", "", bonus.upper()]) / MB, right / MB)
+        link = os.path.join(base, "game-link")
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", link, game], capture_output=True,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
+        if made and os.path.isdir(link):
+            check("the game folder opened through a link, the profile naming the real folder, in MB",
+                  meter(link, ["", "", "", "", "", "", "", bonus], (os.path.join(link, "mod-maker"), bonus)) / MB,
+                  right / MB)
+        else:
+            print("  [--  ] no folder link could be made here: that check is skipped")
+        icon = os.path.join(base, "art", "icon.ico")
+        fill(icon, 1)
+        check("one .ico named for the game icon and the disc icon, outside the game folder, in MB",
+              meter(game, ["", "", "", icon, icon.upper(), "", "", bonus]) / MB, (right + MB) / MB)
+        beside = os.path.join(base, "game Linux")
+        fill(os.path.join(beside, "MyGame.x86_64"), 5)
+        check("a folder beside the game whose name starts the same is counted, in MB",
+              meter(game, ["", "", "", "", "", "", beside, bonus], (maker, bonus, beside)) / MB,
+              (right + 2 * 5 * MB) / MB)
 
         # --------------------------------------------------------------
         print("2. a logo with no transparency is called out")
@@ -219,7 +283,7 @@ def main():
         # mode of every file inside it. That is what turns "open a terminal and
         # chmod this" into "extract, then double-click".
         pack_src = methods(src, "RialtoApp",
-                           ["package_unix_build", "_is_unix_executable",
+                           ["package_unix_build", "unix_archive_stem", "_is_unix_executable",
                             "_unix_launch_target", "unix_launcher_script",
                             "write_unix_launcher",
                             "folder_is_already_packaged", "folder_bytes",
@@ -238,7 +302,9 @@ def main():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import progress_stub
         pack_src += "\n\n" + progress_stub.methods(src)  # the packing moves the live line since 1.5.1 (B6)
-        p = host(pack_src, dict(progress_stub.namespace(), sanitize_text=lambda v: str(v or "")),
+        import store_title_stub
+        p = host(pack_src, dict(progress_stub.namespace(), sanitize_text=lambda v: str(v or ""),
+                                **store_title_stub.namespace(src)),
                  entries={"Title": Flag("MyGame")})
         out = os.path.join(base, "LinuxOut")
         os.makedirs(out, exist_ok=True)
@@ -280,7 +346,7 @@ def main():
 
         print("6. and the player is told what to do with it")
         unix_src = methods(src, "RialtoApp", ["write_unix_instructions"])
-        u = host(unix_src, entries={"Title": Flag("MyGame")})
+        u = host(unix_src, store_title_stub.namespace(src), entries={"Title": Flag("MyGame")})
         u.write_unix_instructions(out, "Linux", archive=name, launcher=target)
         notes = open(os.path.join(out, "START HERE.txt"), encoding="utf-8").read()
         ok("the archive route names the archive", name in notes)
